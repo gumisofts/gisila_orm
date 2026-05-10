@@ -6,8 +6,8 @@ library gisila.generators.codegen.sql_emitter;
 import 'package:gisila/database/types.dart';
 import 'package:gisila/generators/schema_parser.dart';
 
-/// Generate a single string containing all `CREATE TABLE` statements
-/// (in dependency order) plus M2M junction tables and indexes.
+/// Generate a single string containing all `CREATE TABLE` statements,
+/// then foreign-key constraints, then indexes.
 String emitUpSql(SchemaDefinition schema) {
   final buf = StringBuffer()
     ..writeln('-- gisila-generated migration: up')
@@ -33,6 +33,18 @@ String emitUpSql(SchemaDefinition schema) {
       ..writeln();
   }
 
+  // Foreign-key constraints must be added only after every table
+  // exists, otherwise cyclic/table-order dependencies break migration
+  // application.
+  for (final model in schema.models) {
+    final fkSql = _foreignKeyConstraintSql(model);
+    if (fkSql.isNotEmpty) {
+      buf
+        ..writeln(fkSql)
+        ..writeln();
+    }
+  }
+
   // Indexes
   for (final model in schema.models) {
     final idx = _indexSql(model);
@@ -47,7 +59,11 @@ String emitUpSql(SchemaDefinition schema) {
   return buf.toString();
 }
 
-/// Generate the rollback for [emitUpSql]: drop everything in reverse.
+/// Generate the rollback for [emitUpSql].
+///
+/// Order is intentionally:
+/// 1) Drop foreign-key constraints
+/// 2) Drop tables
 String emitDownSql(SchemaDefinition schema) {
   final buf = StringBuffer()
     ..writeln('-- gisila-generated migration: down')
@@ -55,6 +71,13 @@ String emitDownSql(SchemaDefinition schema) {
     ..writeln()
     ..writeln('BEGIN;')
     ..writeln();
+
+  for (final model in schema.models.reversed) {
+    final dropFkSql = _dropForeignKeyConstraintSql(model);
+    if (dropFkSql.isNotEmpty) {
+      buf.writeln(dropFkSql);
+    }
+  }
 
   final emittedJunctions = <String>{};
   for (final rel in schema.relationships.where((r) => r.isManyToMany)) {
@@ -82,24 +105,39 @@ String _createTableSql(ModelDefinition model) {
     pieces.add('  ${_columnDefSql(col, model)}');
   }
 
-  // Foreign-key constraints inline.
-  for (final col in model.foreignKeyColumns) {
-    final ref = col.relationship!.references!;
-    final fkColumn = '${col.name}_id';
-    final refTable = _toSnakeCase(ref);
-    pieces.add(
-      '  CONSTRAINT "${model.tableName}_${col.name}_fkey" '
-      'FOREIGN KEY ("$fkColumn") REFERENCES "$refTable" ("id") '
-      'ON DELETE ${col.relationship!.onDelete ?? 'SET NULL'} '
-      'ON UPDATE ${col.relationship!.onUpdate ?? 'CASCADE'}',
-    );
-  }
-
   buf
     ..writeln(pieces.join(',\n'))
     ..writeln(');');
 
   return buf.toString();
+}
+
+String _foreignKeyConstraintSql(ModelDefinition model) {
+  final buf = StringBuffer();
+  for (final col in model.foreignKeyColumns) {
+    final ref = col.relationship!.references!;
+    final fkColumn = '${col.name}_id';
+    final refTable = _toSnakeCase(ref);
+    buf.writeln(
+      'ALTER TABLE "${model.tableName}" '
+      'ADD CONSTRAINT "${model.tableName}_${col.name}_fkey" '
+      'FOREIGN KEY ("$fkColumn") REFERENCES "$refTable" ("id") '
+      'ON DELETE ${col.relationship!.onDelete ?? 'SET NULL'} '
+      'ON UPDATE ${col.relationship!.onUpdate ?? 'CASCADE'};',
+    );
+  }
+  return buf.toString().trimRight();
+}
+
+String _dropForeignKeyConstraintSql(ModelDefinition model) {
+  final buf = StringBuffer();
+  for (final col in model.foreignKeyColumns) {
+    buf.writeln(
+      'ALTER TABLE "${model.tableName}" '
+      'DROP CONSTRAINT IF EXISTS "${model.tableName}_${col.name}_fkey";',
+    );
+  }
+  return buf.toString().trimRight();
 }
 
 String _columnDefSql(ColumnDefinition col, ModelDefinition model) {
