@@ -4,4 +4,7 @@
 .vscode/
 *.env
 *.sql
+!*.up.sql
+!*.down.sql
+.gisila/
 features.txt

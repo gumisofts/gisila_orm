@@ -3,16 +3,19 @@
 // gisila migration runner.
 //
 // Usage:
-//   dart run gisila:migrate up    [--dir <path>] [--config <yaml>]
-//   dart run gisila:migrate down  [--dir <path>] [--config <yaml>] [--steps N]
+//   dart run gisila:migrate up     [--dir <path>] [--config <yaml>]
+//   dart run gisila:migrate down   [--dir <path>] [--config <yaml>] [--steps N]
 //   dart run gisila:migrate status [--dir <path>] [--config <yaml>]
+//   dart run gisila:migrate diff   --old <path> --new <path> --name <slug> [--out <dir>]
 
 import 'dart:io';
 
 import 'package:gisila/gisila.dart';
+import 'package:gisila/generators/schema_parser.dart';
 
 const _defaultDir = 'lib';
 const _defaultConfig = 'database.yaml';
+const _defaultDiffOutputDir = 'lib/migrations';
 
 Future<void> main(List<String> args) async {
   if (args.isEmpty) {
@@ -22,6 +25,11 @@ Future<void> main(List<String> args) async {
 
   final command = args.first;
   final flags = _parseFlags(args.sublist(1));
+
+  if (command == 'diff') {
+    await _runDiff(flags);
+    return;
+  }
 
   final configPath = flags['config'] ?? _defaultConfig;
   final dir = flags['dir'] ?? _defaultDir;
@@ -94,7 +102,36 @@ Map<String, String> _parseFlags(List<String> argv) {
 
 void _usage() {
   stdout.writeln(
-    'gisila migrate <up|down|status> '
-    '[--dir <path>] [--config <yaml>] [--steps N]',
+    'gisila migrate <up|down|status|diff> '
+    '[--dir <path>] [--config <yaml>] [--steps N] '
+    '[--old <path>] [--new <path>] [--name <slug>] [--out <path>]',
   );
+}
+
+Future<void> _runDiff(Map<String, String> flags) async {
+  final oldPath = flags['old'];
+  final newPath = flags['new'];
+  final name = flags['name'];
+  final outDir = flags['out'] ?? _defaultDiffOutputDir;
+
+  if (oldPath == null || newPath == null || name == null) {
+    stderr.writeln(
+      'Missing required flags for `diff`: '
+      '--old <path> --new <path> --name <slug>',
+    );
+    _usage();
+    exit(64);
+  }
+
+  final oldSchema = await SchemaDefinition.fromFile(oldPath);
+  final newSchema = await SchemaDefinition.fromFile(newPath);
+
+  final differ = SchemaDiffer();
+  final diff = differ.compareSchemas(oldSchema, newSchema);
+  if (diff.isEmpty) {
+    stdout.writeln('No schema changes detected. No migration generated.');
+    return;
+  }
+
+  await differ.generateMigrationFile(diff, outDir, name);
 }

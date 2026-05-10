@@ -657,7 +657,7 @@ class SchemaDiffer {
     }
 
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final upFile = File('$outputPath/${timestamp}_$migrationName.sql');
+    final upFile = File('$outputPath/${timestamp}_$migrationName.up.sql');
     final downFile = File('$outputPath/${timestamp}_$migrationName.down.sql');
 
     // Create output directory
