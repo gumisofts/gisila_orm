@@ -33,7 +33,8 @@ User:
         isTrue,
       );
       expect(
-        diff.operations.any((o) => o.upSql.contains('RENAME COLUMN name TO full_name')),
+        diff.operations.any((o) => o.upSql
+            .contains('RENAME COLUMN "name" TO "full_name"')),
         isTrue,
       );
     });
@@ -72,6 +73,47 @@ User:
       } finally {
         await tmp.delete(recursive: true);
       }
+    });
+
+    test('add index quotes reserved-word columns', () {
+      const oldYaml = '''
+Review:
+  db_table: reviews
+  columns:
+    id:
+      type: integer
+      is_primary: true
+      is_null: false
+''';
+      const newYaml = '''
+Review:
+  db_table: reviews
+  columns:
+    id:
+      type: integer
+      is_primary: true
+      is_null: false
+    desc:
+      type: text
+  indexes:
+    idx_review_desc:
+      columns:
+        - desc
+''';
+
+      final oldSchema = SchemaDefinition.fromYaml(oldYaml);
+      final newSchema = SchemaDefinition.fromYaml(newYaml);
+      final diff = SchemaDiffer().compareSchemas(oldSchema, newSchema);
+
+      final addIndex = diff.operations
+          .where((o) => o.upSql.contains('CREATE INDEX'))
+          .map((o) => o.upSql)
+          .firstWhere((s) => s.contains('idx_review_desc'), orElse: () => '');
+
+      expect(
+        addIndex,
+        'CREATE INDEX "idx_review_desc" ON "reviews" ("desc");',
+      );
     });
   });
 }

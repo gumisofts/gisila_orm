@@ -12,6 +12,10 @@ import 'dart:async';
 import 'dart:io';
 import 'package:gisila/generators/schema_parser.dart';
 
+/// Double-quote a PostgreSQL identifier so reserved words (`desc`, `user`,
+/// `order`, …) and mixed-case names match `sql_emitter` output.
+String _quoteIdent(String ident) => '"${ident.replaceAll('"', '""')}"';
+
 /// Types of schema changes
 enum ChangeType {
   createTable,
@@ -384,7 +388,7 @@ class SchemaDiffer {
   MigrationOperation _generateCreateTableOperation(
       ModelDefinition model, SchemaChange change) {
     final upSql = _generateCreateTableSql(model);
-    final downSql = 'DROP TABLE IF EXISTS ${model.tableName};';
+    final downSql = 'DROP TABLE IF EXISTS ${_quoteIdent(model.tableName)};';
 
     return MigrationOperation(
       upSql: upSql,
@@ -395,7 +399,7 @@ class SchemaDiffer {
 
   MigrationOperation _generateDropTableOperation(
       ModelDefinition model, SchemaChange change) {
-    final upSql = 'DROP TABLE IF EXISTS ${model.tableName};';
+    final upSql = 'DROP TABLE IF EXISTS ${_quoteIdent(model.tableName)};';
     final downSql = _generateCreateTableSql(model);
 
     return MigrationOperation(
@@ -408,9 +412,9 @@ class SchemaDiffer {
   MigrationOperation _generateRenameTableOperation(
       ModelDefinition oldModel, ModelDefinition newModel, SchemaChange change) {
     final upSql =
-        'ALTER TABLE ${oldModel.tableName} RENAME TO ${newModel.tableName};';
+        'ALTER TABLE ${_quoteIdent(oldModel.tableName)} RENAME TO ${_quoteIdent(newModel.tableName)};';
     final downSql =
-        'ALTER TABLE ${newModel.tableName} RENAME TO ${oldModel.tableName};';
+        'ALTER TABLE ${_quoteIdent(newModel.tableName)} RENAME TO ${_quoteIdent(oldModel.tableName)};';
 
     return MigrationOperation(
       upSql: upSql,
@@ -422,9 +426,10 @@ class SchemaDiffer {
   MigrationOperation _generateAddColumnOperation(
       ModelDefinition model, ColumnDefinition column, SchemaChange change) {
     final columnDef = _generateColumnDefinition(column);
-    final upSql = 'ALTER TABLE ${model.tableName} ADD COLUMN $columnDef;';
+    final upSql =
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ADD COLUMN $columnDef;';
     final downSql =
-        'ALTER TABLE ${model.tableName} DROP COLUMN ${column.name};';
+        'ALTER TABLE ${_quoteIdent(model.tableName)} DROP COLUMN ${_quoteIdent(column.name)};';
 
     return MigrationOperation(
       upSql: upSql,
@@ -436,8 +441,10 @@ class SchemaDiffer {
   MigrationOperation _generateDropColumnOperation(
       ModelDefinition model, ColumnDefinition column, SchemaChange change) {
     final columnDef = _generateColumnDefinition(column);
-    final upSql = 'ALTER TABLE ${model.tableName} DROP COLUMN ${column.name};';
-    final downSql = 'ALTER TABLE ${model.tableName} ADD COLUMN $columnDef;';
+    final upSql =
+        'ALTER TABLE ${_quoteIdent(model.tableName)} DROP COLUMN ${_quoteIdent(column.name)};';
+    final downSql =
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ADD COLUMN $columnDef;';
 
     return MigrationOperation(
       upSql: upSql,
@@ -457,11 +464,11 @@ class SchemaDiffer {
 
     if (oldColumn.postgresType != newColumn.postgresType) {
       upStmts.add(
-        'ALTER TABLE ${model.tableName} ALTER COLUMN ${newColumn.name} '
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(newColumn.name)} '
         'TYPE ${newColumn.postgresType};',
       );
       downStmts.add(
-        'ALTER TABLE ${model.tableName} ALTER COLUMN ${oldColumn.name} '
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(oldColumn.name)} '
         'TYPE ${oldColumn.postgresType};',
       );
     }
@@ -471,31 +478,31 @@ class SchemaDiffer {
       final downClause =
           oldColumn.constraints.isNull ? 'DROP NOT NULL' : 'SET NOT NULL';
       upStmts.add(
-        'ALTER TABLE ${model.tableName} ALTER COLUMN ${newColumn.name} $upClause;',
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(newColumn.name)} $upClause;',
       );
       downStmts.add(
-        'ALTER TABLE ${model.tableName} ALTER COLUMN ${oldColumn.name} $downClause;',
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(oldColumn.name)} $downClause;',
       );
     }
     if (oldColumn.constraints.defaultValue !=
         newColumn.constraints.defaultValue) {
       if (newColumn.constraints.defaultValue == null) {
         upStmts.add(
-          'ALTER TABLE ${model.tableName} ALTER COLUMN ${newColumn.name} DROP DEFAULT;',
+          'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(newColumn.name)} DROP DEFAULT;',
         );
       } else {
         upStmts.add(
-          'ALTER TABLE ${model.tableName} ALTER COLUMN ${newColumn.name} '
+          'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(newColumn.name)} '
           'SET DEFAULT ${newColumn.constraints.defaultValue};',
         );
       }
       if (oldColumn.constraints.defaultValue == null) {
         downStmts.add(
-          'ALTER TABLE ${model.tableName} ALTER COLUMN ${oldColumn.name} DROP DEFAULT;',
+          'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(oldColumn.name)} DROP DEFAULT;',
         );
       } else {
         downStmts.add(
-          'ALTER TABLE ${model.tableName} ALTER COLUMN ${oldColumn.name} '
+          'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(oldColumn.name)} '
           'SET DEFAULT ${oldColumn.constraints.defaultValue};',
         );
       }
@@ -505,11 +512,11 @@ class SchemaDiffer {
     // (paranoid default; should not normally hit).
     if (upStmts.isEmpty) {
       upStmts.add(
-        'ALTER TABLE ${model.tableName} ALTER COLUMN ${newColumn.name} '
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(newColumn.name)} '
         'TYPE ${newColumn.postgresType};',
       );
       downStmts.add(
-        'ALTER TABLE ${model.tableName} ALTER COLUMN ${oldColumn.name} '
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(oldColumn.name)} '
         'TYPE ${oldColumn.postgresType};',
       );
     }
@@ -526,10 +533,10 @@ class SchemaDiffer {
     _RenamePair rename,
     SchemaChange change,
   ) {
-    final upSql = 'ALTER TABLE ${model.tableName} '
-        'RENAME COLUMN ${rename.oldName} TO ${rename.newName};';
-    final downSql = 'ALTER TABLE ${model.tableName} '
-        'RENAME COLUMN ${rename.newName} TO ${rename.oldName};';
+    final upSql = 'ALTER TABLE ${_quoteIdent(model.tableName)} '
+        'RENAME COLUMN ${_quoteIdent(rename.oldName)} TO ${_quoteIdent(rename.newName)};';
+    final downSql = 'ALTER TABLE ${_quoteIdent(model.tableName)} '
+        'RENAME COLUMN ${_quoteIdent(rename.newName)} TO ${_quoteIdent(rename.oldName)};';
     return MigrationOperation(upSql: upSql, downSql: downSql, change: change);
   }
 
@@ -541,12 +548,13 @@ class SchemaDiffer {
     final ref = column.relationship?.references;
     final targetTable = _toSnake(ref ?? column.name);
     final fkName = '${model.tableName}_${column.name}_fkey';
-    final upSql = 'ALTER TABLE ${model.tableName} '
-        'ADD CONSTRAINT $fkName '
-        'FOREIGN KEY (${column.name}_id) REFERENCES $targetTable (id) '
+    final fkCol = '${column.name}_id';
+    final upSql = 'ALTER TABLE ${_quoteIdent(model.tableName)} '
+        'ADD CONSTRAINT ${_quoteIdent(fkName)} '
+        'FOREIGN KEY (${_quoteIdent(fkCol)}) REFERENCES ${_quoteIdent(targetTable)} (${_quoteIdent('id')}) '
         'ON DELETE SET NULL ON UPDATE CASCADE;';
     final downSql =
-        'ALTER TABLE ${model.tableName} DROP CONSTRAINT IF EXISTS $fkName;';
+        'ALTER TABLE ${_quoteIdent(model.tableName)} DROP CONSTRAINT IF EXISTS ${_quoteIdent(fkName)};';
     return MigrationOperation(upSql: upSql, downSql: downSql, change: change);
   }
 
@@ -558,11 +566,12 @@ class SchemaDiffer {
     final ref = column.relationship?.references;
     final targetTable = _toSnake(ref ?? column.name);
     final fkName = '${model.tableName}_${column.name}_fkey';
+    final fkCol = '${column.name}_id';
     final upSql =
-        'ALTER TABLE ${model.tableName} DROP CONSTRAINT IF EXISTS $fkName;';
-    final downSql = 'ALTER TABLE ${model.tableName} '
-        'ADD CONSTRAINT $fkName '
-        'FOREIGN KEY (${column.name}_id) REFERENCES $targetTable (id) '
+        'ALTER TABLE ${_quoteIdent(model.tableName)} DROP CONSTRAINT IF EXISTS ${_quoteIdent(fkName)};';
+    final downSql = 'ALTER TABLE ${_quoteIdent(model.tableName)} '
+        'ADD CONSTRAINT ${_quoteIdent(fkName)} '
+        'FOREIGN KEY (${_quoteIdent(fkCol)}) REFERENCES ${_quoteIdent(targetTable)} (${_quoteIdent('id')}) '
         'ON DELETE SET NULL ON UPDATE CASCADE;';
     return MigrationOperation(upSql: upSql, downSql: downSql, change: change);
   }
@@ -575,10 +584,10 @@ class SchemaDiffer {
   MigrationOperation _generateAddIndexOperation(
       ModelDefinition model, IndexDefinition index, SchemaChange change) {
     final uniqueStr = index.isUnique ? 'UNIQUE ' : '';
-    final columnsStr = index.columns.join(', ');
+    final columnsStr = index.columns.map(_quoteIdent).join(', ');
     final upSql =
-        'CREATE ${uniqueStr}INDEX ${index.name} ON ${model.tableName} ($columnsStr);';
-    final downSql = 'DROP INDEX IF EXISTS ${index.name};';
+        'CREATE ${uniqueStr}INDEX ${_quoteIdent(index.name)} ON ${_quoteIdent(model.tableName)} ($columnsStr);';
+    final downSql = 'DROP INDEX IF EXISTS ${_quoteIdent(index.name)};';
 
     return MigrationOperation(
       upSql: upSql,
@@ -590,10 +599,10 @@ class SchemaDiffer {
   MigrationOperation _generateDropIndexOperation(
       ModelDefinition model, IndexDefinition index, SchemaChange change) {
     final uniqueStr = index.isUnique ? 'UNIQUE ' : '';
-    final columnsStr = index.columns.join(', ');
-    final upSql = 'DROP INDEX IF EXISTS ${index.name};';
+    final columnsStr = index.columns.map(_quoteIdent).join(', ');
+    final upSql = 'DROP INDEX IF EXISTS ${_quoteIdent(index.name)};';
     final downSql =
-        'CREATE ${uniqueStr}INDEX ${index.name} ON ${model.tableName} ($columnsStr);';
+        'CREATE ${uniqueStr}INDEX ${_quoteIdent(index.name)} ON ${_quoteIdent(model.tableName)} ($columnsStr);';
 
     return MigrationOperation(
       upSql: upSql,
@@ -605,7 +614,7 @@ class SchemaDiffer {
   /// Generate complete CREATE TABLE SQL
   String _generateCreateTableSql(ModelDefinition model) {
     final buffer = StringBuffer();
-    buffer.writeln('CREATE TABLE ${model.tableName} (');
+    buffer.writeln('CREATE TABLE ${_quoteIdent(model.tableName)} (');
 
     final columnDefs = <String>[];
     for (final column in model.columns) {
@@ -625,9 +634,9 @@ class SchemaDiffer {
     final buffer = StringBuffer();
 
     if (column.type == ColumnType.foreignKey) {
-      buffer.write('${column.name}_id ${column.postgresType}');
+      buffer.write('${_quoteIdent('${column.name}_id')} ${column.postgresType}');
     } else {
-      buffer.write('${column.name} ${column.postgresType}');
+      buffer.write('${_quoteIdent(column.name)} ${column.postgresType}');
     }
 
     if (column.constraints.isPrimary) {
