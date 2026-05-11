@@ -7,7 +7,7 @@ library gisila.database.postgres.core.connections;
 import 'dart:async';
 
 import 'package:gisila/config/database_config.dart';
-import 'package:gisila/database/postgres/exceptions/error_mapper.dart';
+import 'package:gisila/database/postgres/exceptions/exceptions.dart';
 import 'package:gisila/runtime/db_context.dart';
 import 'package:postgres/postgres.dart';
 
@@ -51,7 +51,9 @@ class Database {
   }) async {
     final defaultName = defaultConnectionName ?? config.defaultConnection.name;
     if (!config.hasConnection(defaultName)) {
-      throw StateError('Connection "$defaultName" not found in config');
+      throw DatabaseConfigurationException(
+        'Connection "$defaultName" not found in config',
+      );
     }
 
     final pools = <String, Pool<Connection>>{};
@@ -78,7 +80,9 @@ class Database {
 
     final connection = _config.getConnection(name);
     if (connection == null) {
-      throw StateError('Connection "$name" not found in configuration');
+      throw DatabaseConfigurationException(
+        'Connection "$name" not found in configuration',
+      );
     }
     if (connection.type != DatabaseType.postgresql) {
       throw UnsupportedError(

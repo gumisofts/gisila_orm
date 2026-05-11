@@ -81,8 +81,9 @@ Future<List<File>> _discoverSchemaFiles(Directory root) async {
 }
 
 String _relativePath(String rootPath, String absolutePath) {
-  final normalizedRoot =
-      rootPath.endsWith(Platform.pathSeparator) ? rootPath : '$rootPath${Platform.pathSeparator}';
+  final normalizedRoot = rootPath.endsWith(Platform.pathSeparator)
+      ? rootPath
+      : '$rootPath${Platform.pathSeparator}';
   if (absolutePath.startsWith(normalizedRoot)) {
     return absolutePath.substring(normalizedRoot.length);
   }

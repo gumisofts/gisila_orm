@@ -400,7 +400,8 @@ class _SchemaParser {
       if (e.message.toLowerCase().contains('duplicate mapping key')) {
         _errors.add(SchemaError(
           code: 'duplicate_key',
-          message: 'duplicate key — model, column, and index names must be unique',
+          message:
+              'duplicate key — model, column, and index names must be unique',
           span: e.span ?? _wholeFileSpan(),
           hint: 'remove or rename one of the two entries with this key',
         ));
@@ -678,7 +679,8 @@ class _SchemaParser {
     if (typeValue is! String || typeValue.isEmpty) {
       _errors.add(SchemaError(
         code: 'invalid_type',
-        message: '`type` of "$modelName.$columnName" must be a non-empty string',
+        message:
+            '`type` of "$modelName.$columnName" must be a non-empty string',
         span: typeNode.span,
       ));
       return null;
@@ -703,8 +705,7 @@ class _SchemaParser {
       if (hasReferences) {
         _errors.add(SchemaError(
           code: 'invalid_relationship',
-          message:
-              '`references` is not allowed on builtin type "$typeValue"',
+          message: '`references` is not allowed on builtin type "$typeValue"',
           span: referencesNode.span,
           hint: 'remove `references`, or change `type` to a model name',
         ));
@@ -712,8 +713,7 @@ class _SchemaParser {
       if (isM2M) {
         _errors.add(SchemaError(
           code: 'invalid_relationship',
-          message:
-              '`many_to_many` is not allowed on builtin type "$typeValue"',
+          message: '`many_to_many` is not allowed on builtin type "$typeValue"',
           span: manyToManyNode!.span,
         ));
       }
@@ -814,7 +814,8 @@ class _SchemaParser {
         message:
             'relationship column "$modelName.$columnName" cannot be `is_primary`',
         span: keyNode.span,
-        hint: 'declare a separate `id` column or use a non-relation primary key',
+        hint:
+            'declare a separate `id` column or use a non-relation primary key',
       ));
     }
 
@@ -872,8 +873,11 @@ class _SchemaParser {
 
     final defaultNode = node.nodes['default'];
     dynamic defaultValue = defaultNode?.value;
-    if (defaultNode != null && defaultValue is! String && defaultValue is! num
-        && defaultValue is! bool && defaultValue != null) {
+    if (defaultNode != null &&
+        defaultValue is! String &&
+        defaultValue is! num &&
+        defaultValue is! bool &&
+        defaultValue != null) {
       _errors.add(SchemaError(
         code: 'invalid_value',
         message:
@@ -927,7 +931,8 @@ class _SchemaParser {
     if (columnsNode is! YamlList) {
       _errors.add(SchemaError(
         code: 'expected_list',
-        message: '`columns` of index "$indexName" must be a list of column names',
+        message:
+            '`columns` of index "$indexName" must be a list of column names',
         span: columnsNode.span,
       ));
       return null;

@@ -634,7 +634,8 @@ class SchemaDiffer {
     final buffer = StringBuffer();
 
     if (column.type == ColumnType.foreignKey) {
-      buffer.write('${_quoteIdent('${column.name}_id')} ${column.postgresType}');
+      buffer
+          .write('${_quoteIdent('${column.name}_id')} ${column.postgresType}');
     } else {
       buffer.write('${_quoteIdent(column.name)} ${column.postgresType}');
     }

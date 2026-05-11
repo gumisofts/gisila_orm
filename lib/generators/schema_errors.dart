@@ -83,8 +83,7 @@ class SchemaValidationException implements Exception {
   final List<SchemaError> errors;
 
   /// True if at least one diagnostic is at error severity.
-  bool get hasErrors =>
-      errors.any((e) => e.level == SchemaErrorLevel.error);
+  bool get hasErrors => errors.any((e) => e.level == SchemaErrorLevel.error);
 
   /// Render every diagnostic with optional ANSI colors. When [color]
   /// is null, auto-detects via [stdout.supportsAnsiEscapes] and the
@@ -180,7 +179,8 @@ String _buildCaret(SourceSpan span, String snippet) {
 
 String? _summary(List<SchemaError> errors) {
   if (errors.isEmpty) return null;
-  final errCount = errors.where((e) => e.level == SchemaErrorLevel.error).length;
+  final errCount =
+      errors.where((e) => e.level == SchemaErrorLevel.error).length;
   final warnCount = errors.length - errCount;
   if (errCount == 0 && warnCount == 0) return null;
   final parts = <String>[];

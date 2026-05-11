@@ -10,6 +10,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:gisila/database/postgres/core/connections.dart';
+import 'package:gisila/database/postgres/exceptions/exceptions.dart';
 
 /// One discovered migration on disk: an up SQL plus an optional down
 /// SQL with the same prefix.
@@ -207,14 +208,14 @@ class MigrationManager {
       for (final applied in inBatch) {
         final migration = byId[applied.id];
         if (migration == null) {
-          throw StateError(
+          throw MigrationRollbackException(
             'Cannot roll back migration "${applied.id}": file not found '
             'in discovered set. Pass the original migration directory '
             'when calling down().',
           );
         }
         if (migration.downSql.trim().isEmpty) {
-          throw StateError(
+          throw MigrationRollbackException(
             'Cannot roll back migration "${applied.id}": no down SQL '
             'was found alongside its up file.',
           );

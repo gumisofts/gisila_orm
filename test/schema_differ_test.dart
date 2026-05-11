@@ -33,8 +33,8 @@ User:
         isTrue,
       );
       expect(
-        diff.operations.any((o) => o.upSql
-            .contains('RENAME COLUMN "name" TO "full_name"')),
+        diff.operations.any(
+            (o) => o.upSql.contains('RENAME COLUMN "name" TO "full_name"')),
         isTrue,
       );
     });
@@ -66,7 +66,10 @@ User:
         await differ.generateMigrationFile(diff, tmp.path, 'add_age');
 
         final entries = await tmp.list().toList();
-        final names = entries.whereType<File>().map((f) => f.uri.pathSegments.last).toList();
+        final names = entries
+            .whereType<File>()
+            .map((f) => f.uri.pathSegments.last)
+            .toList();
 
         expect(names.any((n) => n.endsWith('_add_age.up.sql')), isTrue);
         expect(names.any((n) => n.endsWith('_add_age.down.sql')), isTrue);

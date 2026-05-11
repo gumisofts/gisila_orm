@@ -69,8 +69,10 @@ User:
       final dropFkIdx = downSql.indexOf(
         'ALTER TABLE "post" DROP CONSTRAINT IF EXISTS "post_author_fkey";',
       );
-      final dropPostIdx = downSql.indexOf('DROP TABLE IF EXISTS "post" CASCADE;');
-      final dropUserIdx = downSql.indexOf('DROP TABLE IF EXISTS "user" CASCADE;');
+      final dropPostIdx =
+          downSql.indexOf('DROP TABLE IF EXISTS "post" CASCADE;');
+      final dropUserIdx =
+          downSql.indexOf('DROP TABLE IF EXISTS "user" CASCADE;');
 
       expect(dropFkIdx, greaterThanOrEqualTo(0));
       expect(dropPostIdx, greaterThanOrEqualTo(0));

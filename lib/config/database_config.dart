@@ -8,6 +8,7 @@ library gisila.config;
 
 import 'dart:io';
 
+import 'package:gisila/database/postgres/exceptions/exceptions.dart';
 import 'package:yaml/yaml.dart';
 
 /// Supported database types. Phase 1 of gisila ships PostgreSQL only;
@@ -307,7 +308,9 @@ class DatabaseConfig {
   DatabaseConnection get defaultConnection {
     final connection = _connections[_defaultConnection];
     if (connection == null) {
-      throw StateError('Default connection "$_defaultConnection" not found');
+      throw DatabaseConfigurationException(
+        'Default connection "$_defaultConnection" not found',
+      );
     }
     return connection;
   }

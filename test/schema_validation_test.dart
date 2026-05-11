@@ -114,8 +114,7 @@ user:
       type: varchar
 ''';
       final ex = _expectErrors(yaml);
-      final warn = ex.errors
-          .firstWhere((e) => e.code == 'naming_convention');
+      final warn = ex.errors.firstWhere((e) => e.code == 'naming_convention');
       expect(warn.level, SchemaErrorLevel.warning);
       expect(warn.hint, contains('User'));
     });
@@ -151,8 +150,7 @@ User:
     name:
       type: varchar
 ''');
-      final unknownKey = ex.errors
-          .firstWhere((e) => e.code == 'unknown_key');
+      final unknownKey = ex.errors.firstWhere((e) => e.code == 'unknown_key');
       expect(unknownKey.message, contains('collumns'));
       expect(unknownKey.hint, contains('columns'));
     });
@@ -186,8 +184,7 @@ User:
       );
     });
 
-    test('reports unknown column type with the closest builtin suggestion',
-        () {
+    test('reports unknown column type with the closest builtin suggestion', () {
       final ex = _expectErrors('''
 User:
   columns:
@@ -213,8 +210,8 @@ User:
       type: varchar
       is_nul: false
 ''');
-      final err = ex.errors
-          .firstWhere((e) => e.code == 'unknown_key' && e.message.contains('is_nul'));
+      final err = ex.errors.firstWhere(
+          (e) => e.code == 'unknown_key' && e.message.contains('is_nul'));
       expect(err.hint, contains('is_null'));
     });
 
@@ -317,8 +314,8 @@ Post:
       references: Author
       on_delete: CASCAD
 ''');
-      final err = ex.errors
-          .firstWhere((e) => e.code == 'invalid_referential_action');
+      final err =
+          ex.errors.firstWhere((e) => e.code == 'invalid_referential_action');
       expect(err.hint, contains('CASCADE'));
     });
 
@@ -336,8 +333,8 @@ Post:
       references: Author
       reverse_name: posts
 ''');
-      final err = ex.errors
-          .firstWhere((e) => e.code == 'reverse_name_collision');
+      final err =
+          ex.errors.firstWhere((e) => e.code == 'reverse_name_collision');
       expect(err.message, contains('posts'));
     });
   });
@@ -354,8 +351,8 @@ User:
       columns: [name]
       uniqe: true
 ''');
-      final err = ex.errors
-          .firstWhere((e) => e.code == 'unknown_key' && e.message.contains('uniqe'));
+      final err = ex.errors.firstWhere(
+          (e) => e.code == 'unknown_key' && e.message.contains('uniqe'));
       expect(err.hint, contains('unique'));
     });
 
@@ -400,7 +397,8 @@ User:
       type: varchars
 ''';
       try {
-        SchemaDefinition.fromYaml(yaml, sourceUrl: Uri.parse('blog.gisila.yaml'));
+        SchemaDefinition.fromYaml(yaml,
+            sourceUrl: Uri.parse('blog.gisila.yaml'));
         fail('expected SchemaValidationException');
       } on SchemaValidationException catch (e) {
         final report = e.format(color: false);

@@ -38,7 +38,8 @@ class SchemaBuilder implements Builder {
     try {
       // Pass the input asset's URI so error spans render the real
       // file path rather than `<unknown>`.
-      schema = SchemaDefinition.fromYaml(yaml, sourceUrl: Uri.parse(input.uri.toString()));
+      schema = SchemaDefinition.fromYaml(yaml,
+          sourceUrl: Uri.parse(input.uri.toString()));
     } on SchemaValidationException catch (e) {
       // Render the rich, span-highlighted diagnostics through
       // build_runner's logger so the user sees one block per file

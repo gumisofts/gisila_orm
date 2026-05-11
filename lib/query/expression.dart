@@ -89,6 +89,17 @@ extension StringColumnRefOps on ColumnRef<String> {
       BinOp<bool>(this, 'ILIKE', Literal<String>(pattern));
 }
 
+/// String-specific helpers for nullable text columns.
+///
+/// Generated table columns are `ColumnRef<String?>` when `is_null: true`,
+/// so define the same lookup surface there as well.
+extension NullableStringColumnRefOps on ColumnRef<String?> {
+  Expr<bool> like(String pattern) =>
+      BinOp<bool>(this, 'LIKE', Literal<String>(pattern));
+  Expr<bool> ilike(String pattern) =>
+      BinOp<bool>(this, 'ILIKE', Literal<String>(pattern));
+}
+
 /// JSON/JSONB navigation helpers.
 extension JsonColumnRefOps on ColumnRef<Map<String, dynamic>> {
   /// `column -> 'key'` returns a JSON value.

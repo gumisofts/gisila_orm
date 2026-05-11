@@ -12,6 +12,7 @@
 library gisila.query.preloader;
 
 import 'package:gisila/database/extensions.dart';
+import 'package:gisila/database/postgres/exceptions/exceptions.dart';
 import 'package:gisila/query/hydrator.dart';
 import 'package:gisila/query/relation.dart';
 import 'package:gisila/query/table_meta.dart';
@@ -290,12 +291,12 @@ class Preloader {
   }
 
   /// Write a single preloaded value onto a parent. The parent must be a
-  /// [Preloadable] (which all generated models are); if not, we throw a
-  /// pointed [StateError] so users get a clear diagnostic instead of a
+  /// [Preloadable] (which all generated models are); if not, we throw
+  /// [PreloadException] so users get a clear diagnostic instead of a
   /// silent no-op.
   void _writeRelation(Object parent, String relationName, Object? value) {
     if (parent is! Preloadable) {
-      throw StateError(
+      throw PreloadException(
         'Cannot store preloaded "$relationName" on ${parent.runtimeType}: '
         'the model class must mix in `Preloadable`. Re-run code '
         'generation (`dart run gisila:generate`) to regenerate models.',

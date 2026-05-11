@@ -15,6 +15,7 @@
 library gisila.query.query;
 
 import 'package:gisila/database/extensions.dart';
+import 'package:gisila/database/postgres/exceptions/exceptions.dart';
 import 'package:gisila/query/compiler.dart';
 import 'package:gisila/query/expression.dart';
 import 'package:gisila/query/hydrator.dart';
@@ -210,14 +211,15 @@ class Query<T> {
     return rows;
   }
 
-  /// Return exactly one row. Throws [StateError] if zero or > 1 rows.
+  /// Return exactly one row. Throws [QueryNoRowsException] or
+  /// [QueryMultipleRowsException] if zero or more than one row matches.
   Future<T> one(DbContext db) async {
     final rows = await limit(2).all(db);
     if (rows.isEmpty) {
-      throw StateError('Query<$T>.one() found no rows');
+      throw QueryNoRowsException('Query<$T>.one() found no rows');
     }
     if (rows.length > 1) {
-      throw StateError('Query<$T>.one() found multiple rows');
+      throw QueryMultipleRowsException('Query<$T>.one() found multiple rows');
     }
     return rows.single;
   }
@@ -306,7 +308,7 @@ class InsertQuery<T> {
 
   CompiledSql compile() {
     if (_rows.isEmpty) {
-      throw StateError('InsertQuery<$T> has no rows');
+      throw InvalidQueryBuilderException('InsertQuery<$T> has no rows');
     }
     final columns = _rows.first.keys.toList();
     if (_rows.any(
@@ -346,8 +348,10 @@ class InsertQuery<T> {
   Future<T> one(DbContext db) async {
     final rows = await run(db);
     if (rows.isEmpty) {
-      throw StateError('Insert returned no rows (RETURNING disabled or '
-          'ON CONFLICT swallowed the row)');
+      throw InsertReturnedNoRowsException(
+        'InsertQuery<$T> returned no rows (RETURNING disabled or '
+        'ON CONFLICT swallowed the row)',
+      );
     }
     return rows.first;
   }
@@ -379,7 +383,9 @@ class UpdateQuery<T> {
 
   CompiledSql compile() {
     if (_values.isEmpty) {
-      throw StateError('UpdateQuery<$T> has no SET values');
+      throw InvalidQueryBuilderException(
+        'UpdateQuery<$T> has no SET values',
+      );
     }
 
     final c = SqlCompiler();
