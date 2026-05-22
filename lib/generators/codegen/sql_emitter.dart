@@ -253,9 +253,8 @@ String _indexSql(ModelDefinition model) {
       }
       final colName = idx.columns.single;
       final ownerCol = colByName[colName];
-      final distance = idx.distance ??
-          ownerCol?.vector?.distance ??
-          VectorDistance.l2;
+      final distance =
+          idx.distance ?? ownerCol?.vector?.distance ?? VectorDistance.l2;
       final method = idx.using!.name;
       buf.writeln(
         'CREATE INDEX "${idx.name}" ON "${model.tableName}" '

@@ -29,6 +29,7 @@ enum ColumnType {
   decimal,
   json,
   uuid,
+
   /// pgvector `vector(n)` column. Requires the `vector` extension.
   vector,
   // Reference types
