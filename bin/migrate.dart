@@ -10,8 +10,8 @@
 
 import 'dart:io';
 
-import 'package:gisila/gisila.dart';
-import 'package:gisila/generators/schema_parser.dart';
+import 'package:gisila_orm/gisila.dart';
+import 'package:gisila_orm/generators/schema_parser.dart';
 
 const _defaultDir = 'lib';
 const _defaultConfig = 'database.yaml';

@@ -15,7 +15,7 @@ library gisila.test.support.test_db;
 import 'dart:io';
 import 'dart:math';
 
-import 'package:gisila/gisila.dart';
+import 'package:gisila_orm/gisila.dart';
 import 'package:postgres/postgres.dart';
 
 // ---------------------------------------------------------------------------

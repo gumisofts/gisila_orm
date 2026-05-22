@@ -1,7 +1,7 @@
 /// Static schema metadata that codegen attaches to each model.
 library gisila.query.table_meta;
 
-import 'package:gisila/query/hydrator.dart';
+import 'package:gisila_orm/query/hydrator.dart';
 
 /// Static metadata that codegen attaches to each model. Carried inside
 /// `Query<T>` so the runtime knows what table to talk to and how to

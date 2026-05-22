@@ -7,9 +7,9 @@ import 'dart:async';
 
 import 'package:build/build.dart';
 import 'package:dart_style/dart_style.dart';
-import 'package:gisila/generators/codegen/dart_emitter.dart';
-import 'package:gisila/generators/codegen/sql_emitter.dart';
-import 'package:gisila/generators/schema_parser.dart';
+import 'package:gisila_orm/generators/codegen/dart_emitter.dart';
+import 'package:gisila_orm/generators/codegen/sql_emitter.dart';
+import 'package:gisila_orm/generators/schema_parser.dart';
 
 /// Factory referenced from `build.yaml`.
 Builder schemaBuilder(BuilderOptions _) => SchemaBuilder();
@@ -54,7 +54,9 @@ class SchemaBuilder implements Builder {
     final raw = emitDart(schema);
     String formatted;
     try {
-      formatted = DartFormatter().format(raw);
+      formatted = DartFormatter(
+        languageVersion: DartFormatter.latestLanguageVersion,
+      ).format(raw);
     } catch (_) {
       // If formatting fails (e.g. malformed generated code), still
       // write the unformatted output so the user can debug it.

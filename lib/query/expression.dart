@@ -9,6 +9,8 @@
 /// and on [Expr] itself (`and`, `or`, `not`).
 library gisila.query.expression;
 
+import 'package:gisila_orm/database/postgres/types/vector.dart';
+
 /// Base class for every SQL expression that yields a value of type [T].
 abstract class Expr<T> {
   const Expr();
@@ -39,6 +41,7 @@ abstract class ExprVisitor<R> {
   R visitBetween(Between expr);
   R visitNullCheck(NullCheck expr);
   R visitRawSql(RawSql expr);
+  R visitVectorLiteral(VectorLiteral expr);
 }
 
 /// A typed reference to a table column. Codegen emits one of these
@@ -113,6 +116,69 @@ extension JsonColumnRefOps on ColumnRef<Map<String, dynamic>> {
   /// `column ->> 'key'` returns a TEXT.
   Expr<String?> text(String key) =>
       FuncCall<String?>('->>', [this, Literal<String>(key)], infix: true);
+}
+
+/// pgvector helpers. Exposes the three distance operators that ship
+/// with the `vector` extension and a `nearest` shortcut that produces
+/// an `ORDER BY <distance> ASC` term ready to feed into [Query.orderBy].
+///
+/// ```dart
+/// Query<Document>(DocumentTable.metadata)
+///   .orderBy(
+///     DocumentTable.embedding.cosineDistance(query),
+///     // sort ascending: nearest first
+///   )
+///   .limit(10)
+///   .all(db);
+/// ```
+extension VectorColumnRefOps on ColumnRef<Vector> {
+  /// Euclidean (L2) distance `column <-> $1::vector`.
+  Expr<double> l2Distance(Vector value) =>
+      FuncCall<double>('<->', [this, VectorLiteral(value)], infix: true);
+
+  /// Cosine distance `column <=> $1::vector`.
+  Expr<double> cosineDistance(Vector value) =>
+      FuncCall<double>('<=>', [this, VectorLiteral(value)], infix: true);
+
+  /// Negative inner product `column <#> $1::vector`. (pgvector returns
+  /// the negative dot product so that `ORDER BY ... ASC` still gives
+  /// the most-similar items first.)
+  Expr<double> innerProduct(Vector value) =>
+      FuncCall<double>('<#>', [this, VectorLiteral(value)], infix: true);
+
+  /// Generic dispatcher that picks the operator from a [VectorDistance].
+  Expr<double> distance(Vector value,
+      {VectorDistance metric = VectorDistance.l2}) {
+    switch (metric) {
+      case VectorDistance.l2:
+        return l2Distance(value);
+      case VectorDistance.cosine:
+        return cosineDistance(value);
+      case VectorDistance.innerProduct:
+        return innerProduct(value);
+    }
+  }
+}
+
+/// Same as [VectorColumnRefOps] for nullable vector columns.
+extension NullableVectorColumnRefOps on ColumnRef<Vector?> {
+  Expr<double> l2Distance(Vector value) =>
+      FuncCall<double>('<->', [this, VectorLiteral(value)], infix: true);
+  Expr<double> cosineDistance(Vector value) =>
+      FuncCall<double>('<=>', [this, VectorLiteral(value)], infix: true);
+  Expr<double> innerProduct(Vector value) =>
+      FuncCall<double>('<#>', [this, VectorLiteral(value)], infix: true);
+  Expr<double> distance(Vector value,
+      {VectorDistance metric = VectorDistance.l2}) {
+    switch (metric) {
+      case VectorDistance.l2:
+        return l2Distance(value);
+      case VectorDistance.cosine:
+        return cosineDistance(value);
+      case VectorDistance.innerProduct:
+        return innerProduct(value);
+    }
+  }
 }
 
 /// Postgres array helpers.
@@ -209,4 +275,14 @@ class RawSql<T> extends Expr<T> {
 
   @override
   R accept<R>(ExprVisitor<R> visitor) => visitor.visitRawSql(this);
+}
+
+/// A bound [Vector] literal. Compiled as `$n::vector` so pgvector's
+/// distance operators work without any per-call hand-written SQL.
+class VectorLiteral extends Expr<Vector> {
+  final Vector value;
+  const VectorLiteral(this.value);
+
+  @override
+  R accept<R>(ExprVisitor<R> visitor) => visitor.visitVectorLiteral(this);
 }

@@ -1,7 +1,7 @@
 library gisila.test.sql_emitter_test;
 
-import 'package:gisila/generators/codegen/sql_emitter.dart';
-import 'package:gisila/generators/schema_parser.dart';
+import 'package:gisila_orm/generators/codegen/sql_emitter.dart';
+import 'package:gisila_orm/generators/schema_parser.dart';
 import 'package:test/test.dart';
 
 void main() {

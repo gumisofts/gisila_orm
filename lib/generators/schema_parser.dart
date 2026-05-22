@@ -9,11 +9,12 @@ library gisila.generators.schema_parser;
 
 import 'dart:io';
 
-import 'package:gisila/generators/schema_errors.dart';
+import 'package:gisila_orm/database/postgres/types/vector.dart';
+import 'package:gisila_orm/generators/schema_errors.dart';
 import 'package:source_span/source_span.dart';
 import 'package:yaml/yaml.dart';
 
-export 'package:gisila/generators/schema_errors.dart'
+export 'package:gisila_orm/generators/schema_errors.dart'
     show SchemaError, SchemaErrorLevel, SchemaValidationException;
 
 /// Supported column data types
@@ -28,6 +29,8 @@ enum ColumnType {
   decimal,
   json,
   uuid,
+  /// pgvector `vector(n)` column. Requires the `vector` extension.
+  vector,
   // Reference types
   foreignKey,
   manyToMany,
@@ -69,18 +72,45 @@ class RelationshipConfig {
   });
 }
 
+/// Vector-specific configuration carried alongside a [ColumnDefinition]
+/// when [ColumnDefinition.type] is [ColumnType.vector].
+///
+/// `dimensions` is required; `indexMethod` and `distance` are only
+/// consulted when [ColumnConstraints.isIndex] is true (or when an
+/// explicit index in the `indexes:` block targets this column).
+class VectorConfig {
+  /// Number of dimensions; required and must be positive.
+  final int dimensions;
+
+  /// Vector index method to use when an implicit index is requested
+  /// for this column. Defaults to HNSW.
+  final VectorIndexMethod indexMethod;
+
+  /// Distance metric used by the implicit index and any inferred
+  /// opclass. Defaults to [VectorDistance.l2].
+  final VectorDistance distance;
+
+  const VectorConfig({
+    required this.dimensions,
+    this.indexMethod = VectorIndexMethod.hnsw,
+    this.distance = VectorDistance.l2,
+  });
+}
+
 /// Column definition
 class ColumnDefinition {
   final String name;
   final ColumnType type;
   final ColumnConstraints constraints;
   final RelationshipConfig? relationship;
+  final VectorConfig? vector;
 
   const ColumnDefinition({
     required this.name,
     required this.type,
     required this.constraints,
     this.relationship,
+    this.vector,
   });
 
   /// Get Dart type representation
@@ -108,6 +138,8 @@ class ColumnDefinition {
         return 'double';
       case ColumnType.json:
         return 'Map<String, dynamic>';
+      case ColumnType.vector:
+        return 'Vector';
       case ColumnType.foreignKey:
         return relationship?.references ?? 'Object';
       case ColumnType.manyToMany:
@@ -138,6 +170,9 @@ class ColumnDefinition {
         return 'JSONB';
       case ColumnType.uuid:
         return 'UUID';
+      case ColumnType.vector:
+        final dim = vector?.dimensions;
+        return dim == null ? 'VECTOR' : 'VECTOR($dim)';
       case ColumnType.foreignKey:
         return 'INTEGER';
       case ColumnType.manyToMany:
@@ -155,10 +190,21 @@ class IndexDefinition {
   final List<String> columns;
   final bool isUnique;
 
+  /// pgvector index method (`hnsw`/`ivfflat`). Non-null means this is
+  /// a vector index; the SQL emitter chooses the appropriate
+  /// `USING <method> (col <opclass>)` form.
+  final VectorIndexMethod? using;
+
+  /// Distance metric used to pick the pgvector opclass. Only consulted
+  /// when [using] is non-null.
+  final VectorDistance? distance;
+
   const IndexDefinition({
     required this.name,
     required this.columns,
     this.isUnique = false,
+    this.using,
+    this.distance,
   });
 }
 
@@ -302,6 +348,7 @@ const _builtinTypeStrings = <String>{
   'decimal',
   'json',
   'uuid',
+  'vector',
 };
 
 const _knownModelKeys = <String>{'columns', 'indexes', 'db_table'};
@@ -319,9 +366,19 @@ const _knownColumnKeys = <String>{
   'many_to_many',
   'on_delete',
   'on_update',
+  // pgvector-only.
+  'dimensions',
+  'index_method',
+  'distance',
 };
 
-const _knownIndexKeys = <String>{'columns', 'unique'};
+const _knownIndexKeys = <String>{
+  'columns',
+  'unique',
+  // pgvector-only: explicit vector indexes in the `indexes:` block.
+  'using',
+  'distance',
+};
 
 const _validReferentialActions = <String>{
   'NO ACTION',
@@ -700,6 +757,7 @@ class _SchemaParser {
 
     ColumnType type;
     RelationshipConfig? relationship;
+    VectorConfig? vectorConfig;
 
     if (isBuiltin) {
       if (hasReferences) {
@@ -718,6 +776,97 @@ class _SchemaParser {
         ));
       }
       type = _builtinFromString(typeValue)!;
+
+      // Vector-specific knobs: validate even when type is wrong so the
+      // user sees one diagnostic per mistake.
+      final dimsNode = valueNode.nodes['dimensions'];
+      final indexMethodNode = valueNode.nodes['index_method'];
+      final distanceNode = valueNode.nodes['distance'];
+
+      if (type == ColumnType.vector) {
+        int? dims;
+        if (dimsNode == null) {
+          _errors.add(SchemaError(
+            code: 'missing_dimensions',
+            message: 'vector column "$modelName.$columnName" is missing '
+                'required `dimensions:` field',
+            span: keyNode.span,
+            hint: 'add e.g. `dimensions: 1536`',
+          ));
+        } else {
+          final dv = dimsNode.value;
+          if (dv is int && dv > 0) {
+            dims = dv;
+          } else {
+            _errors.add(SchemaError(
+              code: 'invalid_dimensions',
+              message: '`dimensions` on "$modelName.$columnName" must be a '
+                  'positive integer',
+              span: dimsNode.span,
+            ));
+          }
+        }
+
+        VectorIndexMethod indexMethod = VectorIndexMethod.hnsw;
+        if (indexMethodNode != null) {
+          final iv = indexMethodNode.value;
+          final parsed = iv is String ? VectorIndexMethod.fromAlias(iv) : null;
+          if (parsed == null) {
+            final allowed =
+                VectorIndexMethod.values.map((e) => e.name).join(', ');
+            _errors.add(SchemaError(
+              code: 'invalid_index_method',
+              message: '`index_method` on "$modelName.$columnName" must be '
+                  'one of: $allowed',
+              span: indexMethodNode.span,
+            ));
+          } else {
+            indexMethod = parsed;
+          }
+        }
+
+        VectorDistance distance = VectorDistance.l2;
+        if (distanceNode != null) {
+          final dv = distanceNode.value;
+          final parsed = dv is String ? VectorDistance.fromAlias(dv) : null;
+          if (parsed == null) {
+            final allowed =
+                VectorDistance.values.map((e) => e.alias).join(', ');
+            _errors.add(SchemaError(
+              code: 'invalid_distance',
+              message: '`distance` on "$modelName.$columnName" must be one of: '
+                  '$allowed',
+              span: distanceNode.span,
+            ));
+          } else {
+            distance = parsed;
+          }
+        }
+
+        if (dims != null) {
+          vectorConfig = VectorConfig(
+            dimensions: dims,
+            indexMethod: indexMethod,
+            distance: distance,
+          );
+        }
+      } else {
+        // pgvector knobs only make sense on vector columns.
+        for (final entry in <String, YamlNode?>{
+          'dimensions': dimsNode,
+          'index_method': indexMethodNode,
+          'distance': distanceNode,
+        }.entries) {
+          if (entry.value != null) {
+            _errors.add(SchemaError(
+              code: 'invalid_vector_option',
+              message: '`${entry.key}` is only valid on `type: vector` '
+                  '("$modelName.$columnName" is "$typeValue")',
+              span: entry.value!.span,
+            ));
+          }
+        }
+      }
     } else if (looksLikeModel || hasReferences) {
       type = isM2M ? ColumnType.manyToMany : ColumnType.foreignKey;
 
@@ -824,6 +973,7 @@ class _SchemaParser {
       type: type,
       constraints: constraints,
       relationship: relationship,
+      vector: vectorConfig,
     );
   }
 
@@ -982,10 +1132,56 @@ class _SchemaParser {
       }
     }
 
+    // pgvector index extras.
+    VectorIndexMethod? using;
+    final usingNode = valueNode.nodes['using'];
+    if (usingNode != null) {
+      final v = usingNode.value;
+      final parsed = v is String ? VectorIndexMethod.fromAlias(v) : null;
+      if (parsed == null) {
+        final allowed = VectorIndexMethod.values.map((e) => e.name).join(', ');
+        _errors.add(SchemaError(
+          code: 'invalid_index_method',
+          message: '`using` on index "$indexName" must be one of: $allowed',
+          span: usingNode.span,
+        ));
+      } else {
+        using = parsed;
+      }
+    }
+
+    VectorDistance? distance;
+    final distanceNode = valueNode.nodes['distance'];
+    if (distanceNode != null) {
+      final v = distanceNode.value;
+      final parsed = v is String ? VectorDistance.fromAlias(v) : null;
+      if (parsed == null) {
+        final allowed = VectorDistance.values.map((e) => e.alias).join(', ');
+        _errors.add(SchemaError(
+          code: 'invalid_distance',
+          message: '`distance` on index "$indexName" must be one of: $allowed',
+          span: distanceNode.span,
+        ));
+      } else {
+        distance = parsed;
+      }
+    }
+
+    if (unique && using != null) {
+      _errors.add(SchemaError(
+        code: 'invalid_vector_index',
+        message: 'pgvector index "$indexName" cannot be `unique: true`',
+        span: uniqueNode!.span,
+      ));
+      unique = false;
+    }
+
     return IndexDefinition(
       name: indexName,
       columns: colNames,
       isUnique: unique,
+      using: using,
+      distance: distance,
     );
   }
 
@@ -1111,6 +1307,8 @@ ColumnType? _builtinFromString(String typeStr) {
       return ColumnType.json;
     case 'uuid':
       return ColumnType.uuid;
+    case 'vector':
+      return ColumnType.vector;
   }
   return null;
 }

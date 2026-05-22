@@ -5,8 +5,8 @@
 /// emitted into a `DEFAULT ...` clause.
 library gisila.database.types;
 
-import 'package:gisila/database/extensions.dart';
-import 'package:gisila/database/postgres/exceptions/exceptions.dart';
+import 'package:gisila_orm/database/extensions.dart';
+import 'package:gisila_orm/database/postgres/exceptions/exceptions.dart';
 
 /// Validates and formats column default values.
 ///

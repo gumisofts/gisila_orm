@@ -2,7 +2,7 @@
 /// docker-compose Postgres is reachable on `localhost:5454`.
 library gisila.test.transaction_test;
 
-import 'package:gisila/gisila.dart';
+import 'package:gisila_orm/gisila.dart';
 import 'package:test/test.dart';
 
 import 'support/test_db.dart';

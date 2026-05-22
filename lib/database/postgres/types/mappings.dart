@@ -35,7 +35,10 @@ enum PostgresTypeMapping {
   line('Line'),
   box('Box'),
   circle('Circle'),
-  lseg('Lseg');
+  lseg('Lseg'),
+
+  /// pgvector `vector(n)` column type.
+  vector('Vector');
 
   final String dartType;
   const PostgresTypeMapping(this.dartType);
@@ -79,6 +82,8 @@ enum ColumnsDataType {
   box('box'),
   circle('circle'),
   lseg('lseg'),
+
+  vector('vector'),
 
   foreignKey('foreignKey');
 

@@ -8,7 +8,7 @@ library gisila.config;
 
 import 'dart:io';
 
-import 'package:gisila/database/postgres/exceptions/exceptions.dart';
+import 'package:gisila_orm/database/postgres/exceptions/exceptions.dart';
 import 'package:yaml/yaml.dart';
 
 /// Supported database types. Phase 1 of gisila ships PostgreSQL only;

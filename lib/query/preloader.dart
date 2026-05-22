@@ -11,13 +11,13 @@
 /// to row-exploding outer joins.
 library gisila.query.preloader;
 
-import 'package:gisila/database/extensions.dart';
-import 'package:gisila/database/postgres/exceptions/exceptions.dart';
-import 'package:gisila/query/hydrator.dart';
-import 'package:gisila/query/relation.dart';
-import 'package:gisila/query/table_meta.dart';
-import 'package:gisila/runtime/db_context.dart';
-import 'package:gisila/runtime/preloadable.dart';
+import 'package:gisila_orm/database/extensions.dart';
+import 'package:gisila_orm/database/postgres/exceptions/exceptions.dart';
+import 'package:gisila_orm/query/hydrator.dart';
+import 'package:gisila_orm/query/relation.dart';
+import 'package:gisila_orm/query/table_meta.dart';
+import 'package:gisila_orm/runtime/db_context.dart';
+import 'package:gisila_orm/runtime/preloadable.dart';
 import 'package:postgres/postgres.dart';
 
 class Preloader {

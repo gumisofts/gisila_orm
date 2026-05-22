@@ -3,7 +3,7 @@
 
 // ignore_for_file: type=lint, unused_import
 
-import 'package:gisila/gisila.dart';
+import 'package:gisila_orm/gisila.dart';
 
 class User with Preloadable {
   final int? id;

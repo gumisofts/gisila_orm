@@ -6,7 +6,7 @@
 /// receives.
 library gisila.test.preloader_test;
 
-import 'package:gisila/gisila.dart';
+import 'package:gisila_orm/gisila.dart';
 import 'package:postgres/postgres.dart';
 import 'package:test/test.dart';
 

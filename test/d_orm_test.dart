@@ -1,10 +1,10 @@
 /// End-to-end smoke test for the public surface re-exported from
-/// `package:gisila/gisila.dart`. Uses [MockDbContext] so it never
+/// `package:gisila_orm/gisila.dart`. Uses [MockDbContext] so it never
 /// touches a real Postgres - this is the canary test that fails the
 /// fastest if any part of the runtime API breaks at the import level.
 library gisila.test.d_orm_test;
 
-import 'package:gisila/gisila.dart';
+import 'package:gisila_orm/gisila.dart';
 import 'package:test/test.dart';
 
 import 'support/test_db.dart';

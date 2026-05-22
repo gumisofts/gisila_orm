@@ -11,7 +11,7 @@
 ///    convenience entry point.
 library gisila.generators.codegen.dart_emitter;
 
-import 'package:gisila/generators/schema_parser.dart';
+import 'package:gisila_orm/generators/schema_parser.dart';
 
 /// Emit the full `.g.dart` content for [schema].
 String emitDart(SchemaDefinition schema) {
@@ -21,7 +21,7 @@ String emitDart(SchemaDefinition schema) {
     ..writeln()
     ..writeln('// ignore_for_file: type=lint, unused_import')
     ..writeln()
-    ..writeln("import 'package:gisila/gisila.dart';")
+    ..writeln("import 'package:gisila_orm/gisila.dart';")
     ..writeln();
 
   for (final model in schema.models) {
@@ -378,6 +378,17 @@ String _coerce(String expr, ColumnDefinition col,
         return '$expr == null ? null : ($expr is num ? ($expr as num).toDouble() : double.parse($expr.toString()))';
       }
       return '$expr is num ? ($expr as num).toDouble() : double.parse($expr.toString())';
+    case ColumnType.vector:
+      // pgvector usually comes back as text (`[v1,v2,...]`); be lenient
+      // and also accept lists of numbers in case the driver decodes it.
+      if (nullable) {
+        return '$expr == null ? null : ($expr is Vector ? $expr as Vector : '
+            '($expr is List ? Vector.fromList(($expr as List).cast<num>()) : '
+            'Vector.parse($expr.toString())))';
+      }
+      return '$expr is Vector ? $expr as Vector : '
+          '($expr is List ? Vector.fromList(($expr as List).cast<num>()) : '
+          'Vector.parse($expr.toString()))';
     default:
       final base = _baseDartType(col);
       return '$expr as $base${nullable ? '?' : ''}';

@@ -4,7 +4,7 @@ library gisila.test.migration_test;
 
 import 'dart:io';
 
-import 'package:gisila/gisila.dart';
+import 'package:gisila_orm/gisila.dart';
 import 'package:test/test.dart';
 
 import 'support/test_db.dart';

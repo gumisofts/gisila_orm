@@ -1,14 +1,14 @@
 /// The [Database] runtime: manages named pools, hands out [DbContext]s,
 /// and runs transactions. This is the only entry point that user code
-/// should touch from `package:gisila/gisila.dart` for connection
+/// should touch from `package:gisila_orm/gisila.dart` for connection
 /// lifecycle.
 library gisila.database.postgres.core.connections;
 
 import 'dart:async';
 
-import 'package:gisila/config/database_config.dart';
-import 'package:gisila/database/postgres/exceptions/exceptions.dart';
-import 'package:gisila/runtime/db_context.dart';
+import 'package:gisila_orm/config/database_config.dart';
+import 'package:gisila_orm/database/postgres/exceptions/exceptions.dart';
+import 'package:gisila_orm/runtime/db_context.dart';
 import 'package:postgres/postgres.dart';
 
 /// A connected gisila database. Holds one or more named connection

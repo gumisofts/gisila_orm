@@ -14,7 +14,7 @@
 /// from `lib/database/postgres/exceptions/postgresql_exceptions.dart`.
 library gisila.runtime.db_context;
 
-import 'package:gisila/database/postgres/exceptions/error_mapper.dart';
+import 'package:gisila_orm/database/postgres/exceptions/error_mapper.dart';
 import 'package:postgres/postgres.dart';
 
 /// Thin abstraction over a Postgres `Session` (a pool, a connection

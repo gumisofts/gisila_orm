@@ -1,7 +1,7 @@
 targets:
   $default:
     builders:
-      gisila|schemaBuilder:
+      gisila_orm|schemaBuilder:
         generate_for:
           include:
             - lib/**.gisila.yaml
@@ -14,7 +14,7 @@ targets:
 
 builders:
   schemaBuilder:
-    import: "package:gisila/generators/schema_builder.dart"
+    import: "package:gisila_orm/generators/schema_builder.dart"
     builder_factories: ["schemaBuilder"]
     build_extensions:
       ".gisila.yaml":

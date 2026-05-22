@@ -9,8 +9,8 @@ library gisila.migrations.migration_manager;
 import 'dart:async';
 import 'dart:io';
 
-import 'package:gisila/database/postgres/core/connections.dart';
-import 'package:gisila/database/postgres/exceptions/exceptions.dart';
+import 'package:gisila_orm/database/postgres/core/connections.dart';
+import 'package:gisila_orm/database/postgres/exceptions/exceptions.dart';
 
 /// One discovered migration on disk: an up SQL plus an optional down
 /// SQL with the same prefix.

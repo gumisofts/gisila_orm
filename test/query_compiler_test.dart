@@ -6,7 +6,7 @@
 /// fail loudly. They run entirely in-process - no Postgres required.
 library gisila.test.query_compiler_test;
 
-import 'package:gisila/gisila.dart';
+import 'package:gisila_orm/gisila.dart';
 import 'package:test/test.dart';
 
 void main() {

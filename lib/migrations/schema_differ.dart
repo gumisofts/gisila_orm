@@ -1,4 +1,4 @@
-/// Schema differ for gisila: compares two parsed schemas and emits a
+/// Schema differ for gisila_orm: compares two parsed schemas and emits a
 /// list of [SchemaChange]s with paired up/down SQL.
 ///
 /// The differ is intentionally heuristic: column renames are detected
@@ -10,7 +10,8 @@ library gisila.migrations.schema_differ;
 
 import 'dart:async';
 import 'dart:io';
-import 'package:gisila/generators/schema_parser.dart';
+import 'package:gisila_orm/database/postgres/types/vector.dart';
+import 'package:gisila_orm/generators/schema_parser.dart';
 
 /// Double-quote a PostgreSQL identifier so reserved words (`desc`, `user`,
 /// `order`, …) and mixed-case names match `sql_emitter` output.
@@ -127,6 +128,25 @@ class SchemaDiffer {
       newModels[model.name] = model;
     }
 
+    // If the old schema had no vector columns/indexes but the new
+    // schema does, the pgvector extension may not be installed on the
+    // target database. Emit `CREATE EXTENSION IF NOT EXISTS vector;`
+    // as the first operation so subsequent VECTOR(...) DDL succeeds.
+    if (!_schemaUsesVectors(oldSchema) && _schemaUsesVectors(newSchema)) {
+      operations.add(const MigrationOperation(
+        upSql: 'CREATE EXTENSION IF NOT EXISTS vector;',
+        // Don't DROP EXTENSION on rollback: other apps/tables may rely
+        // on pgvector. Rolling back to a schema without vectors should
+        // leave the extension installed; the dropped vector columns
+        // already release any data dependency on it.
+        downSql: '-- pgvector extension intentionally left installed',
+        change: SchemaChange(
+          type: ChangeType.createTable,
+          tableName: 'EXTENSION vector',
+        ),
+      ));
+    }
+
     // Find table changes
     _compareModels(oldModels, newModels, changes, operations);
 
@@ -141,6 +161,19 @@ class SchemaDiffer {
       operations: operations,
       hasDestructiveChanges: hasDestructive,
     );
+  }
+
+  /// Does any model in [schema] declare a vector column or vector index?
+  bool _schemaUsesVectors(SchemaDefinition schema) {
+    for (final model in schema.models) {
+      for (final col in model.columns) {
+        if (col.type == ColumnType.vector) return true;
+      }
+      for (final idx in model.indexes) {
+        if (idx.using != null) return true;
+      }
+    }
+    return false;
   }
 
   /// Compare models (tables)
@@ -376,11 +409,26 @@ class SchemaDiffer {
 
   /// Check if column is modified
   bool _isColumnModified(ColumnDefinition oldCol, ColumnDefinition newCol) {
-    return oldCol.type != newCol.type ||
+    if (oldCol.type != newCol.type ||
         oldCol.constraints.isNull != newCol.constraints.isNull ||
         oldCol.constraints.isUnique != newCol.constraints.isUnique ||
         oldCol.constraints.isPrimary != newCol.constraints.isPrimary ||
-        oldCol.constraints.defaultValue != newCol.constraints.defaultValue;
+        oldCol.constraints.defaultValue != newCol.constraints.defaultValue) {
+      return true;
+    }
+    // Vector-specific shape changes also need a migration: the
+    // declared type carries the dimensions (`VECTOR(n)`), so we have
+    // to detect changes to `dimensions`, and an index method or
+    // distance flip means dropping/re-creating the index.
+    if (oldCol.type == ColumnType.vector && newCol.type == ColumnType.vector) {
+      if (oldCol.postgresType != newCol.postgresType) return true;
+      final ov = oldCol.vector;
+      final nv = newCol.vector;
+      if (ov?.indexMethod != nv?.indexMethod) return true;
+      if (ov?.distance != nv?.distance) return true;
+      if (oldCol.constraints.isIndex != newCol.constraints.isIndex) return true;
+    }
+    return false;
   }
 
   // Migration operation generators
@@ -426,14 +474,27 @@ class SchemaDiffer {
   MigrationOperation _generateAddColumnOperation(
       ModelDefinition model, ColumnDefinition column, SchemaChange change) {
     final columnDef = _generateColumnDefinition(column);
-    final upSql =
-        'ALTER TABLE ${_quoteIdent(model.tableName)} ADD COLUMN $columnDef;';
-    final downSql =
-        'ALTER TABLE ${_quoteIdent(model.tableName)} DROP COLUMN ${_quoteIdent(column.name)};';
+    final upStmts = <String>[
+      'ALTER TABLE ${_quoteIdent(model.tableName)} ADD COLUMN $columnDef;',
+    ];
+    final downStmts = <String>[
+      'ALTER TABLE ${_quoteIdent(model.tableName)} '
+          'DROP COLUMN ${_quoteIdent(column.name)};',
+    ];
+
+    // Vector columns marked `is_index: true` need an explicit
+    // `CREATE INDEX ... USING <method>` to match what a fresh
+    // schema would emit. Without this, adding the column via
+    // incremental migration silently drops the pgvector index.
+    final implicit = _implicitVectorIndexFor(model, column);
+    if (implicit != null) {
+      upStmts.add(implicit.upSql);
+      downStmts.insert(0, implicit.downSql);
+    }
 
     return MigrationOperation(
-      upSql: upSql,
-      downSql: downSql,
+      upSql: upStmts.join('\n'),
+      downSql: downStmts.join('\n'),
       change: change,
     );
   }
@@ -441,16 +502,58 @@ class SchemaDiffer {
   MigrationOperation _generateDropColumnOperation(
       ModelDefinition model, ColumnDefinition column, SchemaChange change) {
     final columnDef = _generateColumnDefinition(column);
-    final upSql =
-        'ALTER TABLE ${_quoteIdent(model.tableName)} DROP COLUMN ${_quoteIdent(column.name)};';
-    final downSql =
-        'ALTER TABLE ${_quoteIdent(model.tableName)} ADD COLUMN $columnDef;';
+    final upStmts = <String>[];
+    final downStmts = <String>[];
+
+    // Mirror image of _generateAddColumnOperation: when dropping a
+    // vector column that previously carried an implicit index, drop
+    // the index first (some pgvector versions barf if it outlives the
+    // column) and re-create it on rollback.
+    final implicit = _implicitVectorIndexFor(model, column);
+    if (implicit != null) {
+      upStmts.add(implicit.downSql);
+    }
+    upStmts.add(
+      'ALTER TABLE ${_quoteIdent(model.tableName)} '
+      'DROP COLUMN ${_quoteIdent(column.name)};',
+    );
+
+    downStmts.add(
+      'ALTER TABLE ${_quoteIdent(model.tableName)} ADD COLUMN $columnDef;',
+    );
+    if (implicit != null) {
+      downStmts.add(implicit.upSql);
+    }
 
     return MigrationOperation(
-      upSql: upSql,
-      downSql: downSql,
+      upSql: upStmts.join('\n'),
+      downSql: downStmts.join('\n'),
       change: change,
     );
+  }
+
+  /// If [column] is a vector column with `is_index: true`, return the
+  /// matching `CREATE INDEX ... USING <method> (col opclass)` /
+  /// `DROP INDEX` pair; otherwise return `null`. We don't emit
+  /// implicit btree indexes here to preserve existing behavior - this
+  /// is strictly the pgvector special case.
+  _ImplicitIndex? _implicitVectorIndexFor(
+    ModelDefinition model,
+    ColumnDefinition column,
+  ) {
+    if (column.type != ColumnType.vector) return null;
+    if (!column.constraints.isIndex) return null;
+    if (column.constraints.isPrimary) return null;
+    if (column.constraints.isUnique) return null;
+    final cfg = column.vector ?? const VectorConfig(dimensions: 0);
+    final idxName = 'idx_${model.tableName}_${column.name}';
+    final method = cfg.indexMethod.name;
+    final opclass = cfg.distance.opclass;
+    final upSql = 'CREATE INDEX ${_quoteIdent(idxName)} '
+        'ON ${_quoteIdent(model.tableName)} '
+        'USING $method (${_quoteIdent(column.name)} $opclass);';
+    final downSql = 'DROP INDEX IF EXISTS ${_quoteIdent(idxName)};';
+    return _ImplicitIndex(upSql: upSql, downSql: downSql);
   }
 
   MigrationOperation _generateModifyColumnOperation(
@@ -505,6 +608,26 @@ class SchemaDiffer {
           'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(oldColumn.name)} '
           'SET DEFAULT ${oldColumn.constraints.defaultValue};',
         );
+      }
+    }
+
+    // Vector index transitions: drop the old implicit index and
+    // re-create the new one when `is_index`, `index_method`, or
+    // `distance` changed. This is the only way for a user to migrate
+    // between HNSW and IVFFlat without dropping the column.
+    if (newColumn.type == ColumnType.vector &&
+        oldColumn.type == ColumnType.vector) {
+      final oldImplicit = _implicitVectorIndexFor(model, oldColumn);
+      final newImplicit = _implicitVectorIndexFor(model, newColumn);
+      if (oldImplicit?.upSql != newImplicit?.upSql) {
+        if (oldImplicit != null) {
+          upStmts.add(oldImplicit.downSql);
+          downStmts.add(oldImplicit.upSql);
+        }
+        if (newImplicit != null) {
+          upStmts.add(newImplicit.upSql);
+          downStmts.add(newImplicit.downSql);
+        }
       }
     }
 
@@ -583,10 +706,7 @@ class SchemaDiffer {
 
   MigrationOperation _generateAddIndexOperation(
       ModelDefinition model, IndexDefinition index, SchemaChange change) {
-    final uniqueStr = index.isUnique ? 'UNIQUE ' : '';
-    final columnsStr = index.columns.map(_quoteIdent).join(', ');
-    final upSql =
-        'CREATE ${uniqueStr}INDEX ${_quoteIdent(index.name)} ON ${_quoteIdent(model.tableName)} ($columnsStr);';
+    final upSql = _createIndexSql(model, index);
     final downSql = 'DROP INDEX IF EXISTS ${_quoteIdent(index.name)};';
 
     return MigrationOperation(
@@ -598,17 +718,41 @@ class SchemaDiffer {
 
   MigrationOperation _generateDropIndexOperation(
       ModelDefinition model, IndexDefinition index, SchemaChange change) {
-    final uniqueStr = index.isUnique ? 'UNIQUE ' : '';
-    final columnsStr = index.columns.map(_quoteIdent).join(', ');
     final upSql = 'DROP INDEX IF EXISTS ${_quoteIdent(index.name)};';
-    final downSql =
-        'CREATE ${uniqueStr}INDEX ${_quoteIdent(index.name)} ON ${_quoteIdent(model.tableName)} ($columnsStr);';
+    final downSql = _createIndexSql(model, index);
 
     return MigrationOperation(
       upSql: upSql,
       downSql: downSql,
       change: change,
     );
+  }
+
+  String _createIndexSql(ModelDefinition model, IndexDefinition index) {
+    if (index.using != null) {
+      if (index.columns.length != 1) {
+        // pgvector indexes are single-column; fall through to the
+        // default form so we don't produce invalid SQL.
+        return _createBtreeIndexSql(model, index);
+      }
+      final colName = index.columns.single;
+      final ownerCol =
+          model.columns.where((c) => c.name == colName).firstOrNull;
+      final distance =
+          index.distance ?? ownerCol?.vector?.distance ?? VectorDistance.l2;
+      return 'CREATE INDEX ${_quoteIdent(index.name)} '
+          'ON ${_quoteIdent(model.tableName)} '
+          'USING ${index.using!.name} '
+          '(${_quoteIdent(colName)} ${distance.opclass});';
+    }
+    return _createBtreeIndexSql(model, index);
+  }
+
+  String _createBtreeIndexSql(ModelDefinition model, IndexDefinition index) {
+    final uniqueStr = index.isUnique ? 'UNIQUE ' : '';
+    final columnsStr = index.columns.map(_quoteIdent).join(', ');
+    return 'CREATE ${uniqueStr}INDEX ${_quoteIdent(index.name)} '
+        'ON ${_quoteIdent(model.tableName)} ($columnsStr);';
   }
 
   /// Generate complete CREATE TABLE SQL
@@ -721,4 +865,12 @@ class _RenamePair {
   final String oldName;
   final String newName;
   const _RenamePair({required this.oldName, required this.newName});
+}
+
+/// SQL pair used internally to emit/reverse the implicit pgvector
+/// index associated with a column that has `is_index: true`.
+class _ImplicitIndex {
+  final String upSql;
+  final String downSql;
+  const _ImplicitIndex({required this.upSql, required this.downSql});
 }

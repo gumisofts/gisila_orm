@@ -14,33 +14,37 @@
 /// ```
 library gisila.query.query;
 
-import 'package:gisila/database/extensions.dart';
-import 'package:gisila/database/postgres/exceptions/exceptions.dart';
-import 'package:gisila/query/compiler.dart';
-import 'package:gisila/query/expression.dart';
-import 'package:gisila/query/hydrator.dart';
-import 'package:gisila/query/preloader.dart';
-import 'package:gisila/query/relation.dart';
-import 'package:gisila/query/table_meta.dart';
-import 'package:gisila/runtime/db_context.dart';
+import 'package:gisila_orm/database/extensions.dart';
+import 'package:gisila_orm/database/postgres/exceptions/exceptions.dart';
+import 'package:gisila_orm/query/compiler.dart';
+import 'package:gisila_orm/query/expression.dart';
+import 'package:gisila_orm/query/hydrator.dart';
+import 'package:gisila_orm/query/preloader.dart';
+import 'package:gisila_orm/query/relation.dart';
+import 'package:gisila_orm/query/table_meta.dart';
+import 'package:gisila_orm/runtime/db_context.dart';
 
-export 'package:gisila/query/compiler.dart' show CompiledSql, SqlCompiler;
-export 'package:gisila/query/expression.dart';
-export 'package:gisila/query/hydrator.dart' show Hydrator, RowMapper;
-export 'package:gisila/query/preloader.dart' show Preloader;
-export 'package:gisila/query/relation.dart';
-export 'package:gisila/query/table_meta.dart';
+export 'package:gisila_orm/query/compiler.dart' show CompiledSql, SqlCompiler;
+export 'package:gisila_orm/query/expression.dart';
+export 'package:gisila_orm/query/hydrator.dart' show Hydrator, RowMapper;
+export 'package:gisila_orm/query/preloader.dart' show Preloader;
+export 'package:gisila_orm/query/relation.dart';
+export 'package:gisila_orm/query/table_meta.dart';
 
 /// Direction for `ORDER BY`.
 enum SortOrder { asc, desc }
 
 /// Single ORDER BY entry.
+///
+/// Holds an arbitrary [Expr] (not just a [ColumnRef]) so we can sort by
+/// computed expressions such as pgvector distance operators:
+/// `ORDER BY embedding <=> $1::vector`.
 class OrderTerm {
-  final ColumnRef<dynamic> column;
+  final Expr<dynamic> expr;
   final SortOrder order;
   final bool nullsFirst;
 
-  const OrderTerm(this.column,
+  const OrderTerm(this.expr,
       {this.order = SortOrder.asc, this.nullsFirst = false});
 }
 
@@ -87,10 +91,13 @@ class Query<T> {
     return this;
   }
 
-  /// Add an ORDER BY entry.
-  Query<T> orderBy(ColumnRef<dynamic> column,
+  /// Add an ORDER BY entry. [expr] is typically a [ColumnRef] but any
+  /// [Expr] is accepted, which is what makes
+  /// `orderBy(embedding.cosineDistance(query))` work for nearest-neighbour
+  /// search.
+  Query<T> orderBy(Expr<dynamic> expr,
       {bool desc = false, bool nullsFirst = false}) {
-    _orderBy.add(OrderTerm(column,
+    _orderBy.add(OrderTerm(expr,
         order: desc ? SortOrder.desc : SortOrder.asc, nullsFirst: nullsFirst));
     return this;
   }
@@ -184,7 +191,7 @@ class Query<T> {
       buf.write(_orderBy.map((t) {
         final dir = t.order == SortOrder.asc ? 'ASC' : 'DESC';
         final nulls = t.nullsFirst ? ' NULLS FIRST' : '';
-        return '${c.visitColumnRef(t.column)} $dir$nulls';
+        return '${c.compile(t.expr)} $dir$nulls';
       }).join(', '));
     }
 

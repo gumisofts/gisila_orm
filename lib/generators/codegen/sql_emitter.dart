@@ -3,8 +3,24 @@
 /// `*.up.sql`/`*.down.sql` next to the `.g.dart` file.
 library gisila.generators.codegen.sql_emitter;
 
-import 'package:gisila/database/types.dart';
-import 'package:gisila/generators/schema_parser.dart';
+import 'package:gisila_orm/database/postgres/types/vector.dart';
+import 'package:gisila_orm/database/types.dart';
+import 'package:gisila_orm/generators/schema_parser.dart';
+
+/// Whether any model declares a vector column or vector index. Used to
+/// decide whether to ship a `CREATE EXTENSION IF NOT EXISTS vector;`
+/// line at the top of the migration.
+bool _schemaUsesVectors(SchemaDefinition schema) {
+  for (final model in schema.models) {
+    for (final col in model.columns) {
+      if (col.type == ColumnType.vector) return true;
+    }
+    for (final idx in model.indexes) {
+      if (idx.using != null) return true;
+    }
+  }
+  return false;
+}
 
 /// Generate a single string containing all `CREATE TABLE` statements,
 /// then foreign-key constraints, then indexes.
@@ -15,6 +31,12 @@ String emitUpSql(SchemaDefinition schema) {
     ..writeln()
     ..writeln('BEGIN;')
     ..writeln();
+
+  if (_schemaUsesVectors(schema)) {
+    buf
+      ..writeln('CREATE EXTENSION IF NOT EXISTS vector;')
+      ..writeln();
+  }
 
   for (final model in schema.models) {
     buf
@@ -202,13 +224,46 @@ String _indexSql(ModelDefinition model) {
     final colName =
         col.type == ColumnType.foreignKey ? '${col.name}_id' : col.name;
     final idxName = 'idx_${model.tableName}_$colName';
+
+    if (col.type == ColumnType.vector) {
+      final cfg = col.vector ?? const VectorConfig(dimensions: 0);
+      final method = cfg.indexMethod.name;
+      final opclass = cfg.distance.opclass;
+      buf.writeln(
+        'CREATE INDEX "$idxName" ON "${model.tableName}" '
+        'USING $method ("$colName" $opclass);',
+      );
+      continue;
+    }
+
     buf.writeln(
       'CREATE INDEX "$idxName" ON "${model.tableName}" ("$colName");',
     );
   }
 
   // Explicit indexes from the schema's `indexes:` block.
+  final colByName = {for (final c in model.columns) c.name: c};
   for (final idx in model.indexes) {
+    if (idx.using != null) {
+      // pgvector index: a single column + a `USING <method> (col opclass)`.
+      if (idx.columns.length != 1) {
+        // Multi-column vector indexes are not supported; fall back to
+        // emitting nothing rather than producing invalid SQL.
+        continue;
+      }
+      final colName = idx.columns.single;
+      final ownerCol = colByName[colName];
+      final distance = idx.distance ??
+          ownerCol?.vector?.distance ??
+          VectorDistance.l2;
+      final method = idx.using!.name;
+      buf.writeln(
+        'CREATE INDEX "${idx.name}" ON "${model.tableName}" '
+        'USING $method ("$colName" ${distance.opclass});',
+      );
+      continue;
+    }
+
     final unique = idx.isUnique ? 'UNIQUE ' : '';
     final cols = idx.columns.map((c) => '"$c"').join(', ');
     buf.writeln(

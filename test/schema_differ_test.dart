@@ -2,8 +2,8 @@ library gisila.test.schema_differ_test;
 
 import 'dart:io';
 
-import 'package:gisila/generators/schema_parser.dart';
-import 'package:gisila/migrations/schema_differ.dart';
+import 'package:gisila_orm/generators/schema_parser.dart';
+import 'package:gisila_orm/migrations/schema_differ.dart';
 import 'package:test/test.dart';
 
 void main() {

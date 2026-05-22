@@ -16,7 +16,7 @@
 /// hydrate the entire chain without consulting a global registry.
 library gisila.query.relation;
 
-import 'package:gisila/query/table_meta.dart';
+import 'package:gisila_orm/query/table_meta.dart';
 
 /// Cardinality and direction of a relation.
 enum RelationKind { hasMany, hasOne, belongsTo, manyToMany }

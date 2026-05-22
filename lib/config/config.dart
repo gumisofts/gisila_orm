@@ -4,7 +4,7 @@
 /// code can import a single library:
 ///
 /// ```dart
-/// import 'package:gisila/config/config.dart';
+/// import 'package:gisila_orm/config/config.dart';
 ///
 /// final config = await DatabaseConfig.fromFile('database.yaml');
 /// ```

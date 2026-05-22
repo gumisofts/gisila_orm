@@ -5,8 +5,9 @@
 /// strings; every fluent operation eventually goes through here.
 library gisila.query.compiler;
 
-import 'package:gisila/database/extensions.dart';
-import 'package:gisila/query/expression.dart';
+import 'package:gisila_orm/database/extensions.dart';
+import 'package:gisila_orm/database/postgres/types/vector.dart';
+import 'package:gisila_orm/query/expression.dart';
 
 /// A finished SQL statement ready to send to a [DbContext].
 class CompiledSql {
@@ -31,7 +32,16 @@ class SqlCompiler implements ExprVisitor<String> {
   List<Object?> get params => List.unmodifiable(_params);
 
   /// Append a single parameter and return its placeholder (e.g. `$3`).
+  ///
+  /// [Vector] values are transparently converted to their pgvector text
+  /// form and cast with `::vector`, so `InsertQuery` / `UpdateQuery`
+  /// can bind a [Vector] field directly without the caller having to
+  /// know the wire format.
   String bind(Object? value) {
+    if (value is Vector) {
+      _params.add(value.toSqlLiteral());
+      return '\$${_params.length}::vector';
+    }
     _params.add(value);
     return '\$${_params.length}';
   }
@@ -90,6 +100,12 @@ class SqlCompiler implements ExprVisitor<String> {
   String visitNullCheck(NullCheck expr) {
     final operand = compile(expr.operand);
     return expr.isNull ? '($operand IS NULL)' : '($operand IS NOT NULL)';
+  }
+
+  @override
+  String visitVectorLiteral(VectorLiteral expr) {
+    _params.add(expr.value.toSqlLiteral());
+    return '\$${_params.length}::vector';
   }
 
   @override
