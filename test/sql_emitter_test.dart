@@ -28,10 +28,10 @@ User:
       final schema = SchemaDefinition.fromYaml(yaml);
       final upSql = emitUpSql(schema);
 
-      final createPostIdx = upSql.indexOf('CREATE TABLE "post"');
-      final createUserIdx = upSql.indexOf('CREATE TABLE "user"');
+      final createPostIdx = upSql.indexOf('CREATE TABLE "posts"');
+      final createUserIdx = upSql.indexOf('CREATE TABLE "users"');
       final addFkIdx = upSql.indexOf(
-        'ALTER TABLE "post" ADD CONSTRAINT "post_author_fkey"',
+        'ALTER TABLE "posts" ADD CONSTRAINT "posts_author_fkey"',
       );
 
       expect(createPostIdx, greaterThanOrEqualTo(0));
@@ -40,7 +40,7 @@ User:
       expect(addFkIdx, greaterThan(createPostIdx));
       expect(addFkIdx, greaterThan(createUserIdx));
       expect(
-        upSql.contains('CREATE TABLE "post" (\n'
+        upSql.contains('CREATE TABLE "posts" (\n'
             '  "id" BIGSERIAL PRIMARY KEY,\n'
             '  "author_id" INTEGER NOT NULL,\n'),
         isTrue,
@@ -67,12 +67,12 @@ User:
       final downSql = emitDownSql(schema);
 
       final dropFkIdx = downSql.indexOf(
-        'ALTER TABLE "post" DROP CONSTRAINT IF EXISTS "post_author_fkey";',
+        'ALTER TABLE "posts" DROP CONSTRAINT IF EXISTS "posts_author_fkey";',
       );
       final dropPostIdx =
-          downSql.indexOf('DROP TABLE IF EXISTS "post" CASCADE;');
+          downSql.indexOf('DROP TABLE IF EXISTS "posts" CASCADE;');
       final dropUserIdx =
-          downSql.indexOf('DROP TABLE IF EXISTS "user" CASCADE;');
+          downSql.indexOf('DROP TABLE IF EXISTS "users" CASCADE;');
 
       expect(dropFkIdx, greaterThanOrEqualTo(0));
       expect(dropPostIdx, greaterThanOrEqualTo(0));

@@ -210,7 +210,7 @@ Document:
       expect(
         up,
         contains(
-          'CREATE INDEX "idx_document_embedding" ON "document" '
+          'CREATE INDEX "idx_documents_embedding" ON "documents" '
           'USING hnsw ("embedding" vector_l2_ops);',
         ),
       );
@@ -235,7 +235,7 @@ Document:
       expect(
         up,
         contains(
-          'CREATE INDEX "embedding_ivf" ON "document" '
+          'CREATE INDEX "embedding_ivf" ON "documents" '
           'USING ivfflat ("embedding" vector_cosine_ops);',
         ),
       );
@@ -366,7 +366,7 @@ Document:
       expect(
         addCol,
         contains(
-          'CREATE INDEX "idx_document_embedding" ON "document" '
+          'CREATE INDEX "idx_documents_embedding" ON "documents" '
           'USING hnsw ("embedding" vector_cosine_ops);',
         ),
       );
@@ -376,7 +376,7 @@ Document:
       final downs = diff.operations.map((o) => o.downSql).toList();
       final addColDown = downs.firstWhere((s) => s.contains('DROP COLUMN'));
       expect(addColDown,
-          contains('DROP INDEX IF EXISTS "idx_document_embedding"'));
+          contains('DROP INDEX IF EXISTS "idx_documents_embedding"'));
       expect(downs.first, contains('pgvector extension intentionally left'));
     });
 
@@ -439,11 +439,11 @@ Document:
       final modify = diff.operations
           .firstWhere((o) => o.change.type == ChangeType.modifyColumn);
       expect(modify.upSql,
-          contains('DROP INDEX IF EXISTS "idx_document_embedding"'));
+          contains('DROP INDEX IF EXISTS "idx_documents_embedding"'));
       expect(
         modify.upSql,
         contains(
-          'CREATE INDEX "idx_document_embedding" ON "document" '
+          'CREATE INDEX "idx_documents_embedding" ON "documents" '
           'USING hnsw ("embedding" vector_cosine_ops);',
         ),
       );
@@ -472,7 +472,7 @@ Document:
       final modify = diff.operations
           .firstWhere((o) => o.change.type == ChangeType.modifyColumn);
       expect(modify.upSql,
-          contains('DROP INDEX IF EXISTS "idx_document_embedding"'));
+          contains('DROP INDEX IF EXISTS "idx_documents_embedding"'));
       expect(modify.upSql, isNot(contains('CREATE INDEX')));
     });
 
