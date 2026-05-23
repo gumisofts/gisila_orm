@@ -1,7 +1,7 @@
-# gisila
+# gisila_orm
 
-A type-safe, schema-driven PostgreSQL ORM for Dart. You describe your tables in
-a small YAML file, run a single `build_runner` command, and get back fully-typed
+A type-safe, schema-driven PostgreSQL ORM for Dart. Describe your tables in a
+small YAML file, run a single `build_runner` command, and get back fully-typed
 model classes, a fluent query builder, paired up/down migration SQL, and a
 batched eager-loader that prevents N+1 queries.
 
@@ -15,10 +15,9 @@ final users = await Query<User>(UserTable.metadata)
     .all(db);
 ```
 
-> **New here?** Read **[GETTING_STARTED.md](GETTING_STARTED.md)** first — a
-> 15-minute, step-by-step tutorial that takes you from `dart create` to a
-> working schema, migration, and tested query. The rest of this README is a
-> reference; the tutorial is the one to read top-to-bottom.
+> **New here?** Read the [end-to-end walkthrough](#end-to-end-walkthrough)
+> below — it takes you from an empty project to a working schema, migration,
+> and tested query in about 15 minutes. The rest of this README is a reference.
 
 ---
 
@@ -48,10 +47,6 @@ final users = await Query<User>(UserTable.metadata)
 
 ## Status
 
-Phase 1 of the wider gisila web framework: a hardened PostgreSQL ORM. Out of
-scope for this release: the `shelf`-based router, WebSocket gateway, and
-OpenAPI generator. Those land in later phases.
-
 | Component | State |
 | --- | --- |
 | Schema YAML + `build_runner` codegen | Ready |
@@ -59,17 +54,21 @@ OpenAPI generator. Those land in later phases.
 | Typed `Query<T>` + `Expr<T>` AST | Ready |
 | Eager-loading `Preloader` (HasMany / HasOne / BelongsTo / M2M) | Ready |
 | Migrations runner + schema differ | Ready |
-| HTTP / WS / OpenAPI / step-test runner | Planned (Phase 7+) |
+
+The ORM is the data layer of the wider gisila stack. The HTTP router lives in
+[`gisila`](../gisila), the OpenAPI generator in
+[`gisila_doc`](../gisila_doc), and the web-based admin UI in
+[`gisila_studio`](../gisila_studio).
 
 ---
 
 ## Project layout
 
 ```
-gisila/
+gisila_orm/
 ├── bin/
-│   ├── generate.dart        # `dart run gisila:generate` → build_runner shim
-│   └── migrate.dart         # `dart run gisila:migrate up|down|status`
+│   ├── generate.dart        # `dart run gisila_orm:generate` → build_runner shim
+│   └── migrate.dart         # `dart run gisila_orm:migrate up|down|status`
 ├── lib/
 │   ├── gisila.dart                          # public API barrel
 │   ├── config/
@@ -118,13 +117,18 @@ gisila/
 
 ## Install
 
-```bash
-dart pub add gisila
-dart pub add --dev build_runner
+```yaml
+# pubspec.yaml
+dependencies:
+  gisila_orm:
+    path: ../gisila_orm   # replace with path / git / pub coordinate
+
+dev_dependencies:
+  build_runner: ^2.4.0
 ```
 
 Add a schema file ending in `.gisila.yaml` anywhere under `lib/`, `example/`,
-or `test/`. The `build_runner` builder automatically picks them up.
+or `test/`. The `build_runner` builder picks them up automatically.
 
 ---
 
@@ -203,7 +207,7 @@ dart run gisila:migrate up --dir lib/models --config database.yaml
 ### 5. Use the ORM
 
 ```dart
-import 'package:gisila/gisila.dart';
+import 'package:gisila_orm/gisila.dart';
 import 'models/blog.gisila.g.dart';
 
 Future<void> main() async {
@@ -447,7 +451,7 @@ The generator is a `build_runner` Builder registered in `build.yaml`:
 ```yaml
 builders:
   schemaBuilder:
-    import: "package:gisila/generators/schema_builder.dart"
+    import: "package:gisila_orm/generators/schema_builder.dart"
     builder_factories: ["schemaBuilder"]
     build_extensions:
       ".gisila.yaml":
@@ -461,7 +465,7 @@ builders:
 You don't normally edit `build.yaml`. Run:
 
 ```bash
-dart run gisila:generate
+dart run gisila_orm:generate
 # equivalent to:
 dart run build_runner build --delete-conflicting-outputs
 ```
@@ -920,12 +924,12 @@ await SchemaDiffer().generateMigrationFile(diff, 'migrations/', 'add_users');
 
 ## CLI reference
 
-### `dart run gisila:generate [build_runner args]`
+### `dart run gisila_orm:generate [build_runner args]`
 
 Thin shim around `dart run build_runner build`. Adds
 `--delete-conflicting-outputs` by default; pass `--no-delete` to opt out.
 
-### `dart run gisila:migrate <up|down|status> [flags]`
+### `dart run gisila_orm:migrate <up|down|status> [flags]`
 
 | Flag | Default | Effect |
 | --- | --- | --- |
@@ -936,9 +940,9 @@ Thin shim around `dart run build_runner build`. Adds
 Examples:
 
 ```bash
-dart run gisila:migrate status --dir lib/models
-dart run gisila:migrate up --dir lib/models --config database.yaml
-dart run gisila:migrate down --dir lib/models --steps 2
+dart run gisila_orm:migrate status --dir lib/models
+dart run gisila_orm:migrate up --dir lib/models --config database.yaml
+dart run gisila_orm:migrate down --dir lib/models --steps 2
 ```
 
 ---
@@ -1060,15 +1064,10 @@ placeholders, never `?`. There is one query pipeline; the
 
 ---
 
-## Roadmap
+## Related packages
 
-The bigger gisila web framework will land in subsequent phases:
-
-- **Phase 7**: `shelf`-based router, class-based controllers, middleware
-  pipeline, DI container.
-- **Phase 8**: WebSocket gateway with channel/topic routing.
-- **Phase 9**: OpenAPI 3.1 generation from the routing tree, fluent
-  schema builders.
-- **Phase 10**: HTTP integration test harness, step/scenario runner.
-
-The ORM API is considered the stable foundation those layers build on.
+| Package | What it adds |
+| ------- | ------------ |
+| [`gisila`](../gisila) | Shelf-based HTTP router with annotation-driven controllers, auth guards, CORS, rate-limiting, and structured logging. |
+| [`gisila_doc`](../gisila_doc) | OpenAPI 3.1 spec generation from annotated controllers; bundled Swagger UI and ReDoc. |
+| [`gisila_studio`](../gisila_studio) | Web-based Django-style admin interface auto-generated from `TableMeta` registrations. |
