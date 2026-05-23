@@ -7,6 +7,24 @@ import 'package:gisila_orm/database/postgres/types/vector.dart';
 import 'package:gisila_orm/database/types.dart';
 import 'package:gisila_orm/generators/schema_parser.dart';
 
+String _resolvedTable(String modelName, SchemaDefinition schema) =>
+    schema.getModel(modelName)?.tableName ??
+    _pluralSnakeCase(_toSnakeCase(modelName));
+
+String _pluralSnakeCase(String s) {
+  if (s.endsWith('s') ||
+      s.endsWith('x') ||
+      s.endsWith('z') ||
+      s.endsWith('ch') ||
+      s.endsWith('sh')) {
+    return '${s}es';
+  }
+  if (s.endsWith('y') && s.length > 1 && !'aeiou'.contains(s[s.length - 2])) {
+    return '${s.substring(0, s.length - 1)}ies';
+  }
+  return '${s}s';
+}
+
 /// Whether any model declares a vector column or vector index. Used to
 /// decide whether to ship a `CREATE EXTENSION IF NOT EXISTS vector;`
 /// line at the top of the migration.
@@ -51,7 +69,7 @@ String emitUpSql(SchemaDefinition schema) {
     final junction = rel.junctionTableName;
     if (junction.isEmpty || !emittedJunctions.add(junction)) continue;
     buf
-      ..writeln(_junctionTableSql(rel))
+      ..writeln(_junctionTableSql(rel, schema))
       ..writeln();
   }
 
@@ -59,7 +77,7 @@ String emitUpSql(SchemaDefinition schema) {
   // exists, otherwise cyclic/table-order dependencies break migration
   // application.
   for (final model in schema.models) {
-    final fkSql = _foreignKeyConstraintSql(model);
+    final fkSql = _foreignKeyConstraintSql(model, schema);
     if (fkSql.isNotEmpty) {
       buf
         ..writeln(fkSql)
@@ -95,7 +113,7 @@ String emitDownSql(SchemaDefinition schema) {
     ..writeln();
 
   for (final model in schema.models.reversed) {
-    final dropFkSql = _dropForeignKeyConstraintSql(model);
+    final dropFkSql = _dropForeignKeyConstraintSql(model, schema);
     if (dropFkSql.isNotEmpty) {
       buf.writeln(dropFkSql);
     }
@@ -134,12 +152,13 @@ String _createTableSql(ModelDefinition model) {
   return buf.toString();
 }
 
-String _foreignKeyConstraintSql(ModelDefinition model) {
+String _foreignKeyConstraintSql(
+    ModelDefinition model, SchemaDefinition schema) {
   final buf = StringBuffer();
   for (final col in model.foreignKeyColumns) {
     final ref = col.relationship!.references!;
     final fkColumn = '${col.name}_id';
-    final refTable = _toSnakeCase(ref);
+    final refTable = _resolvedTable(ref, schema);
     buf.writeln(
       'ALTER TABLE "${model.tableName}" '
       'ADD CONSTRAINT "${model.tableName}_${col.name}_fkey" '
@@ -151,7 +170,8 @@ String _foreignKeyConstraintSql(ModelDefinition model) {
   return buf.toString().trimRight();
 }
 
-String _dropForeignKeyConstraintSql(ModelDefinition model) {
+String _dropForeignKeyConstraintSql(
+    ModelDefinition model, SchemaDefinition schema) {
   final buf = StringBuffer();
   for (final col in model.foreignKeyColumns) {
     buf.writeln(
@@ -197,9 +217,9 @@ String _columnDefSql(ColumnDefinition col, ModelDefinition model) {
   return buf.toString();
 }
 
-String _junctionTableSql(RelationshipInfo rel) {
-  final left = _toSnakeCase(rel.fromModel);
-  final right = _toSnakeCase(rel.toModel);
+String _junctionTableSql(RelationshipInfo rel, SchemaDefinition schema) {
+  final left = _resolvedTable(rel.fromModel, schema);
+  final right = _resolvedTable(rel.toModel, schema);
   return '''CREATE TABLE "${rel.junctionTableName}" (
   "${left}_id" INTEGER NOT NULL,
   "${right}_id" INTEGER NOT NULL,

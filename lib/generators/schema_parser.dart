@@ -325,8 +325,13 @@ class RelationshipInfo {
     this.isManyToMany = false,
   });
 
-  String get junctionTableName =>
-      isManyToMany ? '${_toSnakeCase(fromModel)}_${_toSnakeCase(toModel)}' : '';
+  String get junctionTableName => isManyToMany
+      ? ([
+          _pluralSnakeCase(_toSnakeCase(fromModel)),
+          _pluralSnakeCase(_toSnakeCase(toModel))
+        ]..sort())
+          .join('_')
+      : '';
 }
 
 /// Extension to provide firstOrNull functionality
@@ -390,6 +395,11 @@ const _validReferentialActions = <String>{
 };
 
 final RegExp _identifierPattern = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
+
+/// Stricter pattern for column names: only lowercase letters, digits, and
+/// underscores. This catches accidental camelCase like `createdAt` at
+/// schema-parse time rather than letting it silently reach the database.
+final RegExp _columnNamePattern = RegExp(r'^[a-z_][a-z0-9_]*$');
 
 /// Internal parser that walks a [YamlNode] tree, accumulates
 /// [SchemaError]s, and finally builds a [SchemaDefinition] (or throws
@@ -556,13 +566,27 @@ class _SchemaParser {
       knownKeys: _knownModelKeys,
     );
 
-    // db_table
-    String tableName = _toSnakeCase(modelName);
+    // db_table — defaults to plural snake_case of the model name so that
+    // the common convention is followed and PostgreSQL reserved words like
+    // `user` and `order` are avoided automatically.
+    String tableName = _pluralSnakeCase(_toSnakeCase(modelName));
     final dbTableNode = valueNode.nodes['db_table'];
     if (dbTableNode != null) {
       final v = dbTableNode.value;
-      if (v is String && v.isNotEmpty && _identifierPattern.hasMatch(v)) {
+      if (v is String && v.isNotEmpty && _columnNamePattern.hasMatch(v)) {
         tableName = v;
+        // Warn when an explicit db_table value is a PostgreSQL reserved word.
+        if (_pgReservedWords.contains(v.toLowerCase())) {
+          _errors.add(SchemaError(
+            code: 'reserved_table_name',
+            message: 'table name "$v" for model "$modelName" is a PostgreSQL '
+                'reserved keyword',
+            span: dbTableNode.span,
+            hint: 'choose a different name (e.g. "${v}s") to avoid '
+                'ambiguity — or keep it and ensure all queries use quoted '
+                'identifiers',
+          ));
+        }
       } else {
         _errors.add(SchemaError(
           code: 'invalid_db_table',
@@ -572,6 +596,17 @@ class _SchemaParser {
           hint: 'use snake_case letters, digits, and underscores only',
         ));
       }
+    } else if (_pgReservedWords.contains(tableName.toLowerCase())) {
+      // Auto-derived name still collides after pluralisation (shouldn't
+      // happen with basic English words, but guard just in case).
+      _errors.add(SchemaError(
+        code: 'reserved_table_name',
+        message: 'auto-derived table name "$tableName" for model "$modelName" '
+            'is a PostgreSQL reserved keyword',
+        span: keyNode.span,
+        hint: 'add `db_table: ${tableName}s` under "$modelName:" to pick '
+            'an explicit safe name',
+      ));
     }
 
     // columns
@@ -608,12 +643,13 @@ class _SchemaParser {
         ));
         continue;
       }
-      if (!_identifierPattern.hasMatch(colNameValue)) {
+      if (!_columnNamePattern.hasMatch(colNameValue)) {
         _errors.add(SchemaError(
           code: 'invalid_column_name',
           message: 'invalid column name "$colNameValue"',
           span: colKey.span,
-          hint: 'use snake_case letters, digits, and underscores only',
+          hint: 'use snake_case letters, digits, and underscores only '
+              '(e.g. "created_at" not "createdAt")',
         ));
         continue;
       }
@@ -1320,3 +1356,105 @@ String _toSnakeCase(String input) {
           RegExp(r'[A-Z]'), (match) => '_${match.group(0)?.toLowerCase()}')
       .replaceFirst(RegExp(r'^_'), '');
 }
+
+/// Pluralise a snake_case identifier using basic English rules.
+/// Used to derive the default SQL table name from a model name so that:
+///   - the common convention of plural table names is followed
+///   - reserved SQL keywords like `user` and `order` are avoided
+///     (they become `users` and `orders`).
+String _pluralSnakeCase(String snake) {
+  if (snake.endsWith('s') ||
+      snake.endsWith('x') ||
+      snake.endsWith('z') ||
+      snake.endsWith('ch') ||
+      snake.endsWith('sh')) {
+    return '${snake}es';
+  }
+  if (snake.endsWith('y') &&
+      snake.length > 1 &&
+      !'aeiou'.contains(snake[snake.length - 2])) {
+    return '${snake.substring(0, snake.length - 1)}ies';
+  }
+  return '${snake}s';
+}
+
+/// PostgreSQL reserved words that are unsafe as unquoted table names.
+/// Even when quoted the names cause confusion; the generator warns when
+/// a derived table name matches one of these.
+const _pgReservedWords = {
+  'user',
+  'order',
+  'like',
+  'table',
+  'column',
+  'index',
+  'group',
+  'select',
+  'insert',
+  'update',
+  'delete',
+  'from',
+  'where',
+  'join',
+  'primary',
+  'foreign',
+  'key',
+  'default',
+  'check',
+  'unique',
+  'constraint',
+  'trigger',
+  'view',
+  'sequence',
+  'schema',
+  'database',
+  'all',
+  'and',
+  'any',
+  'as',
+  'asc',
+  'between',
+  'by',
+  'case',
+  'cast',
+  'create',
+  'cross',
+  'current_date',
+  'current_time',
+  'current_timestamp',
+  'desc',
+  'distinct',
+  'drop',
+  'else',
+  'end',
+  'except',
+  'exists',
+  'false',
+  'for',
+  'full',
+  'grant',
+  'having',
+  'in',
+  'inner',
+  'intersect',
+  'into',
+  'is',
+  'left',
+  'limit',
+  'natural',
+  'not',
+  'null',
+  'offset',
+  'on',
+  'or',
+  'outer',
+  'right',
+  'set',
+  'then',
+  'to',
+  'true',
+  'union',
+  'values',
+  'when',
+  'with',
+};

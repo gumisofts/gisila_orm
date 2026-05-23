@@ -148,7 +148,7 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
       ..writeln('  static final Relation<${model.name}, $ref> $relName =')
       ..writeln('      BelongsToRelation<${model.name}, $ref>(')
       ..writeln("        parentTable: '${model.tableName}',")
-      ..writeln("        childTable: '${_snake(ref)}',")
+      ..writeln("        childTable: '${_tableOf(ref, schema)}',")
       ..writeln("        name: '$relName',")
       ..writeln("        parentForeignKey: '$fkColumn',")
       ..writeln('        childMeta: ${ref}Table.metadata,')
@@ -162,14 +162,14 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
 
   for (final col in m2mFields) {
     final ref = col.relationship!.references!;
-    final junction = _junction(model.name, ref);
+    final junction = _junction(model.name, ref, schema);
     final relName = _camel(col.name);
     buf
       ..writeln()
       ..writeln('  static final Relation<${model.name}, $ref> $relName =')
       ..writeln('      ManyToManyRelation<${model.name}, $ref>(')
       ..writeln("        parentTable: '${model.tableName}',")
-      ..writeln("        childTable: '${_snake(ref)}',")
+      ..writeln("        childTable: '${_tableOf(ref, schema)}',")
       ..writeln("        name: '$relName',")
       ..writeln("        junctionTable: '$junction',")
       ..writeln("        junctionParentKey: '${_snake(model.name)}_id',")
@@ -191,7 +191,7 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
     if (inverse.isManyToMany) {
       // Inverse of a M2M is also a M2M, just with the junction read in
       // the other direction.
-      final junction = _junction(inverse.fromModel, inverse.toModel);
+      final junction = _junction(inverse.fromModel, inverse.toModel, schema);
       buf
         ..writeln()
         ..writeln(
@@ -200,7 +200,8 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
         ..writeln(
             '      ManyToManyRelation<${model.name}, ${inverse.fromModel}>(')
         ..writeln("        parentTable: '${model.tableName}',")
-        ..writeln("        childTable: '${_snake(inverse.fromModel)}',")
+        ..writeln(
+            "        childTable: '${_tableOf(inverse.fromModel, schema)}',")
         ..writeln("        name: '$relName',")
         ..writeln("        junctionTable: '$junction',")
         ..writeln("        junctionParentKey: '${_snake(model.name)}_id',")
@@ -222,7 +223,8 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
             '$relName =')
         ..writeln('      HasManyRelation<${model.name}, ${inverse.fromModel}>(')
         ..writeln("        parentTable: '${model.tableName}',")
-        ..writeln("        childTable: '${_snake(inverse.fromModel)}',")
+        ..writeln(
+            "        childTable: '${_tableOf(inverse.fromModel, schema)}',")
         ..writeln("        name: '$relName',")
         ..writeln("        childForeignKey: '$fkColumn',")
         ..writeln('        childMeta: ${inverse.fromModel}Table.metadata,')
@@ -422,6 +424,29 @@ String _snake(String s) => s
     .replaceAllMapped(RegExp(r'[A-Z]'), (m) => '_${m.group(0)!.toLowerCase()}')
     .replaceFirst(RegExp(r'^_'), '');
 
+/// Return the SQL table name for [modelName], preferring the resolved
+/// [TableMeta.tableName] from the schema over a derived plural-snake name.
+/// This ensures that any `db_table:` override in the YAML is honoured.
+String _tableOf(String modelName, SchemaDefinition schema) =>
+    schema.getModel(modelName)?.tableName ?? _pluralSnake(modelName);
+
+/// Plural snake_case from a PascalCase model name. Mirrors the logic in
+/// schema_parser.dart's `_pluralSnakeCase` so the two are always in sync.
+String _pluralSnake(String modelName) {
+  final s = _snake(modelName);
+  if (s.endsWith('s') ||
+      s.endsWith('x') ||
+      s.endsWith('z') ||
+      s.endsWith('ch') ||
+      s.endsWith('sh')) {
+    return '${s}es';
+  }
+  if (s.endsWith('y') && s.length > 1 && !'aeiou'.contains(s[s.length - 2])) {
+    return '${s.substring(0, s.length - 1)}ies';
+  }
+  return '${s}s';
+}
+
 String _camel(String s) {
   final parts = s.split('_');
   if (parts.isEmpty) return s;
@@ -450,7 +475,7 @@ String _pluralCamel(String s) {
   return _camel('${base}s');
 }
 
-String _junction(String a, String b) {
-  final pair = [_snake(a), _snake(b)]..sort();
+String _junction(String a, String b, SchemaDefinition schema) {
+  final pair = [_tableOf(a, schema), _tableOf(b, schema)]..sort();
   return pair.join('_');
 }

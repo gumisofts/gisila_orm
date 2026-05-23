@@ -317,15 +317,18 @@ class InsertQuery<T> {
     if (_rows.isEmpty) {
       throw InvalidQueryBuilderException('InsertQuery<$T> has no rows');
     }
-    final columns = _rows.first.keys.toList();
-    if (_rows.any(
+    // Normalize camelCase keys to snake_case so callers that accidentally
+    // pass e.g. 'createdAt' still produce valid SQL.
+    final normalized = _rows.map(_normalizeKeys).toList();
+    final columns = normalized.first.keys.toList();
+    if (normalized.any(
         (r) => r.length != columns.length || !columns.every(r.containsKey))) {
       throw ArgumentError('All inserted rows must use the same column set');
     }
 
     final c = SqlCompiler();
     final colsSql = columns.map((s) => s.safeTk).join(', ');
-    final valuesSql = _rows.map((row) {
+    final valuesSql = normalized.map((row) {
       final placeholders = columns.map((col) => c.bind(row[col])).join(', ');
       return '($placeholders)';
     }).join(', ');
@@ -396,7 +399,8 @@ class UpdateQuery<T> {
     }
 
     final c = SqlCompiler();
-    final setSql = _values.entries
+    final normalized = _normalizeKeys(_values);
+    final setSql = normalized.entries
         .map((e) => '${e.key.safeTk} = ${c.bind(e.value)}')
         .join(', ');
 
@@ -456,4 +460,26 @@ class DeleteQuery<T> {
     if (!_returning) return const [];
     return Hydrator<T>(_meta.fromRow).hydrateAll(result);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Convert a camelCase identifier to snake_case.
+/// e.g. `createdAt` → `created_at`, `emailOtp` → `email_otp`.
+/// Already-snake_case keys are returned unchanged.
+String _camelToSnake(String s) => s
+    .replaceAllMapped(RegExp(r'[A-Z]'), (m) => '_${m.group(0)!.toLowerCase()}')
+    .replaceFirst(RegExp(r'^_'), '');
+
+/// Return a copy of [map] with every key normalised to snake_case so that
+/// callers may pass camelCase keys (e.g. `{'createdAt': …}`) and still
+/// produce valid SQL column references.
+Map<String, Object?> _normalizeKeys(Map<String, Object?> map) {
+  final out = <String, Object?>{};
+  for (final entry in map.entries) {
+    out[_camelToSnake(entry.key)] = entry.value;
+  }
+  return out;
 }
