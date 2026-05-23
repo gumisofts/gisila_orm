@@ -1,6 +1,6 @@
 name: gisila_orm
 description: Dart simple orm for postgress
-version: 0.0.1+5
+version: 0.0.1+6
 repository: https://github.com/gumisofts/gisila
 
 environment:
@@ -10,7 +10,7 @@ dependencies:
   path: ^1.8.0
   args: ^2.4.2
   build: ^2.4.1
-  dart_style: ">=2.3.6 <4.0.0"
+  dart_style: ">=3.0.0 <4.0.0"
   postgres: ^3.1.2
   source_span: ^1.10.0
   yaml: ^3.1.2

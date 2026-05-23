@@ -54,7 +54,9 @@ class SchemaBuilder implements Builder {
     final raw = emitDart(schema);
     String formatted;
     try {
-      formatted = DartFormatter().format(raw);
+      formatted = DartFormatter(
+              languageVersion: DartFormatter.latestLanguageVersion)
+          .format(raw);
     } catch (_) {
       // If formatting fails (e.g. malformed generated code), still
       // write the unformatted output so the user can debug it.
