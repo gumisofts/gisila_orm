@@ -1,6 +1,1 @@
-.dart_tool/
-.vscode/
-*.env
-*.sql
-features.txt
-test/
+doc/
