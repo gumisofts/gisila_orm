@@ -111,7 +111,15 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
     ..writeln('  factory ${model.name}.fromJson(Map<String, dynamic> json) =>')
     ..writeln('      ${model.name}.fromRow(json);')
     ..writeln()
-    ..writeln('  Map<String, dynamic> toJson() => toRow();');
+    ..writeln(
+        '  Map<String, dynamic> toJson({List<String> exclude = const [], List<String> only = const []}) {')
+    ..writeln('    final row = toRow();')
+    ..writeln(
+        '    if (only.isNotEmpty) return {for (final k in only) k: row[k]};')
+    ..writeln('    if (exclude.isEmpty) return row;')
+    ..writeln(
+        '    return Map.of(row)..removeWhere((k, _) => exclude.contains(k));')
+    ..writeln('  }');
 
   // copyWith --------------------------------------------------------------
   buf

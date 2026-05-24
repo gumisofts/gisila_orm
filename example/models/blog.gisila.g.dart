@@ -44,7 +44,13 @@ class User with Preloadable {
 
   factory User.fromJson(Map<String, dynamic> json) => User.fromRow(json);
 
-  Map<String, dynamic> toJson() => toRow();
+  Map<String, dynamic> toJson(
+      {List<String> exclude = const [], List<String> only = const []}) {
+    final row = toRow();
+    if (only.isNotEmpty) return {for (final k in only) k: row[k]};
+    if (exclude.isEmpty) return row;
+    return Map.of(row)..removeWhere((k, _) => exclude.contains(k));
+  }
 
   User copyWith({
     int? id,
@@ -164,7 +170,13 @@ class Author with Preloadable {
 
   factory Author.fromJson(Map<String, dynamic> json) => Author.fromRow(json);
 
-  Map<String, dynamic> toJson() => toRow();
+  Map<String, dynamic> toJson(
+      {List<String> exclude = const [], List<String> only = const []}) {
+    final row = toRow();
+    if (only.isNotEmpty) return {for (final k in only) k: row[k]};
+    if (exclude.isEmpty) return row;
+    return Map.of(row)..removeWhere((k, _) => exclude.contains(k));
+  }
 
   Author copyWith({
     int? id,
@@ -267,7 +279,13 @@ class Book with Preloadable {
 
   factory Book.fromJson(Map<String, dynamic> json) => Book.fromRow(json);
 
-  Map<String, dynamic> toJson() => toRow();
+  Map<String, dynamic> toJson(
+      {List<String> exclude = const [], List<String> only = const []}) {
+    final row = toRow();
+    if (only.isNotEmpty) return {for (final k in only) k: row[k]};
+    if (exclude.isEmpty) return row;
+    return Map.of(row)..removeWhere((k, _) => exclude.contains(k));
+  }
 
   Book copyWith({
     String? title,
@@ -438,7 +456,13 @@ class Review with Preloadable {
 
   factory Review.fromJson(Map<String, dynamic> json) => Review.fromRow(json);
 
-  Map<String, dynamic> toJson() => toRow();
+  Map<String, dynamic> toJson(
+      {List<String> exclude = const [], List<String> only = const []}) {
+    final row = toRow();
+    if (only.isNotEmpty) return {for (final k in only) k: row[k]};
+    if (exclude.isEmpty) return row;
+    return Map.of(row)..removeWhere((k, _) => exclude.contains(k));
+  }
 
   Review copyWith({
     int? id,
