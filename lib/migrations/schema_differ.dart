@@ -11,6 +11,7 @@ library gisila.migrations.schema_differ;
 import 'dart:async';
 import 'dart:io';
 import 'package:gisila_orm/database/postgres/types/vector.dart';
+import 'package:gisila_orm/database/types.dart';
 import 'package:gisila_orm/generators/schema_parser.dart';
 
 /// Double-quote a PostgreSQL identifier so reserved words (`desc`, `user`,
@@ -30,6 +31,11 @@ enum ChangeType {
   dropIndex,
   addForeignKey,
   dropForeignKey,
+  addEnum,
+  dropEnum,
+  addEnumValue,
+  addCheck,
+  dropCheck,
 }
 
 /// Represents a single schema change
@@ -75,6 +81,16 @@ class SchemaChange {
         return 'Add foreign key: $tableName.$columnName';
       case ChangeType.dropForeignKey:
         return 'Drop foreign key: $tableName.$columnName';
+      case ChangeType.addEnum:
+        return 'Create enum: $newName';
+      case ChangeType.dropEnum:
+        return 'Drop enum: $oldName';
+      case ChangeType.addEnumValue:
+        return 'Add enum value: $oldName + $newName';
+      case ChangeType.addCheck:
+        return 'Add check: $tableName.$columnName';
+      case ChangeType.dropCheck:
+        return 'Drop check: $tableName.$columnName';
     }
   }
 }
@@ -110,6 +126,13 @@ class SchemaDiff {
 
 /// Schema differ class
 class SchemaDiffer {
+  // Populated at the start of each `compareSchemas` call so the
+  // migration-operation generators below can resolve what a relationship
+  // column's `_id` type/target-column should actually be, instead of
+  // hardcoding `INTEGER ... REFERENCES ... ("id")`. Keyed by model name.
+  Map<String, ModelDefinition> _oldModelsByName = const {};
+  Map<String, ModelDefinition> _newModelsByName = const {};
+
   /// Compare two schemas and generate diff
   SchemaDiff compareSchemas(
       SchemaDefinition oldSchema, SchemaDefinition newSchema) {
@@ -127,6 +150,9 @@ class SchemaDiffer {
     for (final model in newSchema.models) {
       newModels[model.name] = model;
     }
+
+    _oldModelsByName = oldModels;
+    _newModelsByName = newModels;
 
     // If the old schema had no vector columns/indexes but the new
     // schema does, the pgvector extension may not be installed on the
@@ -147,6 +173,10 @@ class SchemaDiffer {
       ));
     }
 
+    // Enum types (CREATE TYPE / ADD VALUE). Destructive enum drops are
+    // emitted after tables that may depend on them are handled.
+    _compareEnums(oldSchema, newSchema, changes, operations);
+
     // Find table changes
     _compareModels(oldModels, newModels, changes, operations);
 
@@ -154,13 +184,80 @@ class SchemaDiffer {
     final hasDestructive = changes.any((change) =>
         change.type == ChangeType.dropTable ||
         change.type == ChangeType.dropColumn ||
-        change.type == ChangeType.modifyColumn);
+        change.type == ChangeType.modifyColumn ||
+        change.type == ChangeType.dropEnum ||
+        change.type == ChangeType.dropCheck);
 
     return SchemaDiff(
       changes: changes,
       operations: operations,
       hasDestructiveChanges: hasDestructive,
     );
+  }
+
+  void _compareEnums(
+    SchemaDefinition oldSchema,
+    SchemaDefinition newSchema,
+    List<SchemaChange> changes,
+    List<MigrationOperation> operations,
+  ) {
+    final oldEnums = {for (final e in oldSchema.enums) e.name: e};
+    final newEnums = {for (final e in newSchema.enums) e.name: e};
+
+    for (final e in newEnums.values) {
+      final old = oldEnums[e.name];
+      if (old == null) {
+        final change = SchemaChange(
+          type: ChangeType.addEnum,
+          newName: e.name,
+        );
+        changes.add(change);
+        final values = e.values.map((v) => "'$v'").join(', ');
+        operations.add(MigrationOperation(
+          upSql:
+              'CREATE TYPE ${_quoteIdent(e.postgresTypeName)} AS ENUM ($values);',
+          downSql: 'DROP TYPE IF EXISTS ${_quoteIdent(e.postgresTypeName)};',
+          change: change,
+        ));
+        continue;
+      }
+      // Additive values only. Removals/renames require manual SQL.
+      for (final v in e.values) {
+        if (old.values.contains(v)) continue;
+        final change = SchemaChange(
+          type: ChangeType.addEnumValue,
+          oldName: e.name,
+          newName: v,
+        );
+        changes.add(change);
+        operations.add(MigrationOperation(
+          // ADD VALUE cannot run inside a transaction block on older
+          // Postgres; document that authors may need to apply outside BEGIN.
+          upSql:
+              'ALTER TYPE ${_quoteIdent(e.postgresTypeName)} ADD VALUE IF NOT EXISTS \'$v\';',
+          downSql:
+              '-- Cannot automatically remove enum value "$v" from ${e.postgresTypeName}',
+          change: change,
+        ));
+      }
+    }
+
+    for (final e in oldEnums.values) {
+      if (newEnums.containsKey(e.name)) continue;
+      final change = SchemaChange(
+        type: ChangeType.dropEnum,
+        oldName: e.name,
+      );
+      changes.add(change);
+      operations.add(MigrationOperation(
+        upSql: 'DROP TYPE IF EXISTS ${_quoteIdent(e.postgresTypeName)};',
+        downSql: () {
+          final values = e.values.map((v) => "'$v'").join(', ');
+          return 'CREATE TYPE ${_quoteIdent(e.postgresTypeName)} AS ENUM ($values);';
+        }(),
+        change: change,
+      ));
+    }
   }
 
   /// Does any model in [schema] declare a vector column or vector index?
@@ -228,7 +325,67 @@ class SchemaDiffer {
 
         // Compare indexes
         _compareIndexes(oldModel, newModel, changes, operations);
+
+        // Compare named CHECK constraints
+        _compareChecks(oldModel, newModel, changes, operations);
       }
+    }
+  }
+
+  void _compareChecks(
+    ModelDefinition oldModel,
+    ModelDefinition newModel,
+    List<SchemaChange> changes,
+    List<MigrationOperation> operations,
+  ) {
+    final oldChecks = {
+      for (final c in oldModel.allChecks) c.name: c,
+    };
+    final newChecks = {
+      for (final c in newModel.allChecks) c.name: c,
+    };
+
+    for (final name in oldChecks.keys) {
+      if (newChecks.containsKey(name) &&
+          oldChecks[name]!.expression == newChecks[name]!.expression) {
+        continue;
+      }
+      if (!newChecks.containsKey(name) ||
+          oldChecks[name]!.expression != newChecks[name]!.expression) {
+        final change = SchemaChange(
+          type: ChangeType.dropCheck,
+          tableName: newModel.tableName,
+          columnName: name,
+        );
+        changes.add(change);
+        final old = oldChecks[name]!;
+        operations.add(MigrationOperation(
+          upSql:
+              'ALTER TABLE ${_quoteIdent(newModel.tableName)} DROP CONSTRAINT IF EXISTS ${_quoteIdent(name)};',
+          downSql:
+              'ALTER TABLE ${_quoteIdent(newModel.tableName)} ADD CONSTRAINT ${_quoteIdent(name)} CHECK (${old.expression});',
+          change: change,
+        ));
+      }
+    }
+
+    for (final name in newChecks.keys) {
+      final neu = newChecks[name]!;
+      final old = oldChecks[name];
+      if (old != null && old.expression == neu.expression) continue;
+      final change = SchemaChange(
+        type: ChangeType.addCheck,
+        tableName: newModel.tableName,
+        columnName: name,
+      );
+      changes.add(change);
+      operations.add(MigrationOperation(
+        upSql:
+            'ALTER TABLE ${_quoteIdent(newModel.tableName)} ADD CONSTRAINT ${_quoteIdent(name)} CHECK (${neu.expression});',
+        downSql:
+            'ALTER TABLE ${_quoteIdent(newModel.tableName)} DROP CONSTRAINT IF EXISTS ${_quoteIdent(name)};',
+        change: change,
+      ));
     }
   }
 
@@ -331,10 +488,71 @@ class SchemaDiffer {
       }
     }
 
-    // 5. In-place modifications.
+    // 5. In-place modifications / FK promotions for columns that keep
+    //    the same logical YAML name.
     for (final newCol in newColumns.values) {
       final oldCol = oldColumns[newCol.name];
-      if (oldCol != null && _isColumnModified(oldCol, newCol)) {
+      if (oldCol == null) continue;
+
+      // Physical rename when a scalar becomes an FK (or the reverse):
+      // e.g. `merchant` (uuid) → `merchant` (FK) stores as `merchant_id`.
+      if (oldCol.physicalColumnName != newCol.physicalColumnName) {
+        final rename = _RenamePair(
+          oldName: oldCol.physicalColumnName,
+          newName: newCol.physicalColumnName,
+        );
+        final change = SchemaChange(
+          type: ChangeType.renameColumn,
+          tableName: newModel.tableName,
+          oldName: rename.oldName,
+          newName: rename.newName,
+        );
+        changes.add(change);
+        operations.add(_generateRenameColumnOperation(newModel, rename, change));
+      }
+
+      final oldIsFk = oldCol.type == ColumnType.foreignKey;
+      final newIsFk = newCol.type == ColumnType.foreignKey;
+      if (!oldIsFk && newIsFk) {
+        final fkChange = SchemaChange(
+          type: ChangeType.addForeignKey,
+          tableName: newModel.tableName,
+          columnName: newCol.name,
+        );
+        changes.add(fkChange);
+        operations
+            .add(_generateAddForeignKeyOperation(newModel, newCol, fkChange));
+      } else if (oldIsFk && !newIsFk) {
+        final fkChange = SchemaChange(
+          type: ChangeType.dropForeignKey,
+          tableName: newModel.tableName,
+          columnName: oldCol.name,
+        );
+        changes.add(fkChange);
+        operations
+            .add(_generateDropForeignKeyOperation(newModel, oldCol, fkChange));
+      } else if (oldIsFk && newIsFk && _foreignKeyConstraintChanged(oldCol, newCol)) {
+        // Recreate the constraint when the target / referential actions
+        // change. Physical type changes are handled below.
+        final dropChange = SchemaChange(
+          type: ChangeType.dropForeignKey,
+          tableName: newModel.tableName,
+          columnName: oldCol.name,
+        );
+        changes.add(dropChange);
+        operations
+            .add(_generateDropForeignKeyOperation(newModel, oldCol, dropChange));
+        final addChange = SchemaChange(
+          type: ChangeType.addForeignKey,
+          tableName: newModel.tableName,
+          columnName: newCol.name,
+        );
+        changes.add(addChange);
+        operations
+            .add(_generateAddForeignKeyOperation(newModel, newCol, addChange));
+      }
+
+      if (_isColumnModified(oldCol, newCol)) {
         final change = SchemaChange(
           type: ChangeType.modifyColumn,
           tableName: newModel.tableName,
@@ -352,14 +570,36 @@ class SchemaDiffer {
   }
 
   /// Heuristic used by the rename detector. Two columns are
-  /// "compatible" for a rename when they share the same Postgres type
-  /// signature and nullability/uniqueness profile.
+  /// "compatible" for a rename when they share the same *resolved*
+  /// Postgres type signature and nullability/uniqueness profile.
+  ///
+  /// Foreign-key columns resolve to their referenced PK type, so a bare
+  /// `uuid` column can rename into a `foreign_key` that points at a UUID
+  /// primary key (and vice versa) without being treated as drop+add.
   bool _columnsLookCompatible(ColumnDefinition a, ColumnDefinition b) {
-    if (a.type != b.type) return false;
-    if (a.postgresType != b.postgresType) return false;
+    if (_resolvedPostgresType(a, useOld: true) !=
+        _resolvedPostgresType(b, useOld: false)) {
+      return false;
+    }
     if (a.constraints.isNull != b.constraints.isNull) return false;
     if (a.constraints.isPrimary != b.constraints.isPrimary) return false;
     return true;
+  }
+
+  /// Postgres type that will actually be emitted for [column].
+  ///
+  /// Foreign keys inherit the referenced model's primary-key type
+  /// (`UUID`, `BIGINT`, …). Falling back to [ColumnDefinition.postgresType]
+  /// for FKs would incorrectly report `INTEGER` and cause diffs like
+  /// `ALTER COLUMN … TYPE INTEGER` when promoting a UUID column to an FK.
+  String _resolvedPostgresType(ColumnDefinition column,
+      {required bool useOld}) {
+    if (column.type == ColumnType.foreignKey) {
+      final models = useOld ? _oldModelsByName : _newModelsByName;
+      final refPk = models[column.relationship?.references]?.primaryKey;
+      return refPk?.effectivePostgresType ?? 'BIGINT';
+    }
+    return column.effectivePostgresType;
   }
 
   /// Compare indexes
@@ -407,13 +647,27 @@ class SchemaDiffer {
     }
   }
 
-  /// Check if column is modified
+  /// Whether [oldCol]/[newCol] need an in-place attribute migration
+  /// (`ALTER COLUMN … TYPE/NULL/DEFAULT`).
+  ///
+  /// A bare type flip of `uuid` → `foreign_key` (or the reverse) is **not**
+  /// a column modification when the resolved Postgres type is unchanged —
+  /// the FK constraint transition is emitted separately. Comparing
+  /// [ColumnDefinition.postgresType] directly is wrong for FKs because
+  /// that getter hardcodes `INTEGER`.
   bool _isColumnModified(ColumnDefinition oldCol, ColumnDefinition newCol) {
-    if (oldCol.type != newCol.type ||
-        oldCol.constraints.isNull != newCol.constraints.isNull ||
-        oldCol.constraints.isUnique != newCol.constraints.isUnique ||
-        oldCol.constraints.isPrimary != newCol.constraints.isPrimary ||
-        oldCol.constraints.defaultValue != newCol.constraints.defaultValue) {
+    final oldType = _resolvedPostgresType(oldCol, useOld: true);
+    final newType = _resolvedPostgresType(newCol, useOld: false);
+    if (oldType != newType) return true;
+    if (oldCol.constraints.isNull != newCol.constraints.isNull) return true;
+    if (oldCol.constraints.isUnique != newCol.constraints.isUnique) return true;
+    if (oldCol.constraints.isPrimary != newCol.constraints.isPrimary) {
+      return true;
+    }
+    if (oldCol.constraints.defaultValue != newCol.constraints.defaultValue) {
+      return true;
+    }
+    if (oldCol.constraints.maxLength != newCol.constraints.maxLength) {
       return true;
     }
     // Vector-specific shape changes also need a migration: the
@@ -421,12 +675,37 @@ class SchemaDiffer {
     // to detect changes to `dimensions`, and an index method or
     // distance flip means dropping/re-creating the index.
     if (oldCol.type == ColumnType.vector && newCol.type == ColumnType.vector) {
-      if (oldCol.postgresType != newCol.postgresType) return true;
       final ov = oldCol.vector;
       final nv = newCol.vector;
       if (ov?.indexMethod != nv?.indexMethod) return true;
       if (ov?.distance != nv?.distance) return true;
       if (oldCol.constraints.isIndex != newCol.constraints.isIndex) return true;
+    }
+    if (oldCol.type == ColumnType.array && newCol.type == ColumnType.array) {
+      if (oldCol.array?.elementType != newCol.array?.elementType) return true;
+      if (oldCol.array?.maxLength != newCol.array?.maxLength) return true;
+    }
+    if (oldCol.type == ColumnType.enumType &&
+        newCol.type == ColumnType.enumType) {
+      if (oldCol.enumConfig?.enumName != newCol.enumConfig?.enumName) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _foreignKeyConstraintChanged(
+    ColumnDefinition oldCol,
+    ColumnDefinition newCol,
+  ) {
+    final oldRel = oldCol.relationship;
+    final newRel = newCol.relationship;
+    if (oldRel?.references != newRel?.references) return true;
+    if ((oldRel?.onDelete ?? 'SET NULL') != (newRel?.onDelete ?? 'SET NULL')) {
+      return true;
+    }
+    if ((oldRel?.onUpdate ?? 'CASCADE') != (newRel?.onUpdate ?? 'CASCADE')) {
+      return true;
     }
     return false;
   }
@@ -435,7 +714,14 @@ class SchemaDiffer {
 
   MigrationOperation _generateCreateTableOperation(
       ModelDefinition model, SchemaChange change) {
-    final upSql = _generateCreateTableSql(model);
+    final buf = StringBuffer(_generateCreateTableSql(model));
+    for (final check in model.checks) {
+      buf.write(
+        '\nALTER TABLE ${_quoteIdent(model.tableName)} '
+        'ADD CONSTRAINT ${_quoteIdent(check.name)} CHECK (${check.expression});',
+      );
+    }
+    final upSql = buf.toString();
     final downSql = 'DROP TABLE IF EXISTS ${_quoteIdent(model.tableName)};';
 
     return MigrationOperation(
@@ -448,7 +734,7 @@ class SchemaDiffer {
   MigrationOperation _generateDropTableOperation(
       ModelDefinition model, SchemaChange change) {
     final upSql = 'DROP TABLE IF EXISTS ${_quoteIdent(model.tableName)};';
-    final downSql = _generateCreateTableSql(model);
+    final downSql = _generateCreateTableSql(model, useOld: true);
 
     return MigrationOperation(
       upSql: upSql,
@@ -501,7 +787,10 @@ class SchemaDiffer {
 
   MigrationOperation _generateDropColumnOperation(
       ModelDefinition model, ColumnDefinition column, SchemaChange change) {
-    final columnDef = _generateColumnDefinition(column);
+    // The dropped column belonged to the old schema, so any FK target
+    // it pointed at must be resolved there too (the new schema may no
+    // longer have that model, or may have changed its primary key).
+    final columnDef = _generateColumnDefinition(column, useOld: true);
     final upStmts = <String>[];
     final downStmts = <String>[];
 
@@ -565,14 +854,22 @@ class SchemaDiffer {
     final upStmts = <String>[];
     final downStmts = <String>[];
 
-    if (oldColumn.postgresType != newColumn.postgresType) {
+    final oldType = _resolvedPostgresType(oldColumn, useOld: true);
+    final newType = _resolvedPostgresType(newColumn, useOld: false);
+    // Physical renames (if any) are emitted before this op on the way up,
+    // and reversed after this op on the way down — so both directions
+    // must target the *new* physical column name.
+    final colIdent = _quoteIdent(newColumn.physicalColumnName);
+    final upCol = colIdent;
+    final downCol = colIdent;
+    if (oldType != newType) {
       upStmts.add(
-        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(newColumn.name)} '
-        'TYPE ${newColumn.postgresType};',
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN $upCol '
+        'TYPE $newType;',
       );
       downStmts.add(
-        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(oldColumn.name)} '
-        'TYPE ${oldColumn.postgresType};',
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN $downCol '
+        'TYPE $oldType;',
       );
     }
     if (oldColumn.constraints.isNull != newColumn.constraints.isNull) {
@@ -581,32 +878,32 @@ class SchemaDiffer {
       final downClause =
           oldColumn.constraints.isNull ? 'DROP NOT NULL' : 'SET NOT NULL';
       upStmts.add(
-        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(newColumn.name)} $upClause;',
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN $upCol $upClause;',
       );
       downStmts.add(
-        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(oldColumn.name)} $downClause;',
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN $downCol $downClause;',
       );
     }
     if (oldColumn.constraints.defaultValue !=
         newColumn.constraints.defaultValue) {
       if (newColumn.constraints.defaultValue == null) {
         upStmts.add(
-          'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(newColumn.name)} DROP DEFAULT;',
+          'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN $upCol DROP DEFAULT;',
         );
       } else {
         upStmts.add(
-          'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(newColumn.name)} '
-          'SET DEFAULT ${newColumn.constraints.defaultValue};',
+          'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN $upCol '
+          'SET DEFAULT ${_formatDefault(newColumn)};',
         );
       }
       if (oldColumn.constraints.defaultValue == null) {
         downStmts.add(
-          'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(oldColumn.name)} DROP DEFAULT;',
+          'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN $downCol DROP DEFAULT;',
         );
       } else {
         downStmts.add(
-          'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(oldColumn.name)} '
-          'SET DEFAULT ${oldColumn.constraints.defaultValue};',
+          'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN $downCol '
+          'SET DEFAULT ${_formatDefault(oldColumn)};',
         );
       }
     }
@@ -635,12 +932,12 @@ class SchemaDiffer {
     // (paranoid default; should not normally hit).
     if (upStmts.isEmpty) {
       upStmts.add(
-        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(newColumn.name)} '
-        'TYPE ${newColumn.postgresType};',
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN $upCol '
+        'TYPE $newType;',
       );
       downStmts.add(
-        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN ${_quoteIdent(oldColumn.name)} '
-        'TYPE ${oldColumn.postgresType};',
+        'ALTER TABLE ${_quoteIdent(model.tableName)} ALTER COLUMN $downCol '
+        'TYPE $oldType;',
       );
     }
 
@@ -669,13 +966,17 @@ class SchemaDiffer {
     SchemaChange change,
   ) {
     final ref = column.relationship?.references;
-    final targetTable = _toSnake(ref ?? column.name);
+    final target = _newModelsByName[ref];
+    final targetTable = target?.tableName ?? _toSnake(ref ?? column.name);
+    final targetPkName = target?.primaryKey?.name ?? 'id';
     final fkName = '${model.tableName}_${column.name}_fkey';
-    final fkCol = '${column.name}_id';
+    final fkCol = column.physicalColumnName;
+    final onDelete = column.relationship?.onDelete ?? 'SET NULL';
+    final onUpdate = column.relationship?.onUpdate ?? 'CASCADE';
     final upSql = 'ALTER TABLE ${_quoteIdent(model.tableName)} '
         'ADD CONSTRAINT ${_quoteIdent(fkName)} '
-        'FOREIGN KEY (${_quoteIdent(fkCol)}) REFERENCES ${_quoteIdent(targetTable)} (${_quoteIdent('id')}) '
-        'ON DELETE SET NULL ON UPDATE CASCADE;';
+        'FOREIGN KEY (${_quoteIdent(fkCol)}) REFERENCES ${_quoteIdent(targetTable)} (${_quoteIdent(targetPkName)}) '
+        'ON DELETE $onDelete ON UPDATE $onUpdate;';
     final downSql =
         'ALTER TABLE ${_quoteIdent(model.tableName)} DROP CONSTRAINT IF EXISTS ${_quoteIdent(fkName)};';
     return MigrationOperation(upSql: upSql, downSql: downSql, change: change);
@@ -686,16 +987,21 @@ class SchemaDiffer {
     ColumnDefinition column,
     SchemaChange change,
   ) {
+    // This FK belonged to the old schema; resolve its target there too.
     final ref = column.relationship?.references;
-    final targetTable = _toSnake(ref ?? column.name);
+    final target = _oldModelsByName[ref];
+    final targetTable = target?.tableName ?? _toSnake(ref ?? column.name);
+    final targetPkName = target?.primaryKey?.name ?? 'id';
     final fkName = '${model.tableName}_${column.name}_fkey';
-    final fkCol = '${column.name}_id';
+    final fkCol = column.physicalColumnName;
+    final onDelete = column.relationship?.onDelete ?? 'SET NULL';
+    final onUpdate = column.relationship?.onUpdate ?? 'CASCADE';
     final upSql =
         'ALTER TABLE ${_quoteIdent(model.tableName)} DROP CONSTRAINT IF EXISTS ${_quoteIdent(fkName)};';
     final downSql = 'ALTER TABLE ${_quoteIdent(model.tableName)} '
         'ADD CONSTRAINT ${_quoteIdent(fkName)} '
-        'FOREIGN KEY (${_quoteIdent(fkCol)}) REFERENCES ${_quoteIdent(targetTable)} (${_quoteIdent('id')}) '
-        'ON DELETE SET NULL ON UPDATE CASCADE;';
+        'FOREIGN KEY (${_quoteIdent(fkCol)}) REFERENCES ${_quoteIdent(targetTable)} (${_quoteIdent(targetPkName)}) '
+        'ON DELETE $onDelete ON UPDATE $onUpdate;';
     return MigrationOperation(upSql: upSql, downSql: downSql, change: change);
   }
 
@@ -735,9 +1041,10 @@ class SchemaDiffer {
         // default form so we don't produce invalid SQL.
         return _createBtreeIndexSql(model, index);
       }
-      final colName = index.columns.single;
+      final logicalName = index.columns.single;
+      final colName = _physicalIndexColumn(logicalName, model);
       final ownerCol =
-          model.columns.where((c) => c.name == colName).firstOrNull;
+          model.columns.where((c) => c.name == logicalName).firstOrNull;
       final distance =
           index.distance ?? ownerCol?.vector?.distance ?? VectorDistance.l2;
       return 'CREATE INDEX ${_quoteIdent(index.name)} '
@@ -750,21 +1057,64 @@ class SchemaDiffer {
 
   String _createBtreeIndexSql(ModelDefinition model, IndexDefinition index) {
     final uniqueStr = index.isUnique ? 'UNIQUE ' : '';
-    final columnsStr = index.columns.map(_quoteIdent).join(', ');
+    final columnsStr = index.columns
+        .map((c) => _quoteIdent(_physicalIndexColumn(c, model)))
+        .join(', ');
     return 'CREATE ${uniqueStr}INDEX ${_quoteIdent(index.name)} '
         'ON ${_quoteIdent(model.tableName)} ($columnsStr);';
   }
 
-  /// Generate complete CREATE TABLE SQL
-  String _generateCreateTableSql(ModelDefinition model) {
+  String _physicalIndexColumn(String logicalName, ModelDefinition model) {
+    final col = model.columns.where((c) => c.name == logicalName).firstOrNull;
+    return col?.physicalColumnName ?? logicalName;
+  }
+
+  String _formatDefault(ColumnDefinition column) {
+    final value = column.constraints.defaultValue;
+    if (column.type == ColumnType.enumType) {
+      final lit = value.toString().replaceAll("'", "''");
+      return "'$lit'::${column.enumConfig!.postgresTypeName}";
+    }
+    if (column.type == ColumnType.array) {
+      return DefaultEngine.instance.formatArrayDefault(
+        value,
+        column.array!.pgCast,
+        columnLabel: column.name,
+      );
+    }
+    if (column.type == ColumnType.point ||
+        column.type == ColumnType.box ||
+        column.type == ColumnType.circle ||
+        column.type == ColumnType.lseg) {
+      final lit = value.toString().replaceAll("'", "''");
+      return "'$lit'::${column.type.name}";
+    }
+    return DefaultEngine.instance.formatForSql(
+      value,
+      column.dartType.replaceAll('?', ''),
+      columnLabel: column.name,
+    );
+  }
+
+  /// Generate complete CREATE TABLE SQL. [useOld] is forwarded to
+  /// [_generateColumnDefinition] - pass `true` when [model] comes from
+  /// the old schema (e.g. recreating a dropped table on rollback).
+  String _generateCreateTableSql(ModelDefinition model, {bool useOld = false}) {
     final buffer = StringBuffer();
     buffer.writeln('CREATE TABLE ${_quoteIdent(model.tableName)} (');
 
     final columnDefs = <String>[];
     for (final column in model.columns) {
       if (!column.isRelationship || column.type == ColumnType.foreignKey) {
-        columnDefs.add('  ${_generateColumnDefinition(column)}');
+        columnDefs
+            .add('  ${_generateColumnDefinition(column, useOld: useOld)}');
       }
+    }
+    for (final col in model.columns) {
+      final expr = col.checkExpression;
+      if (expr == null || expr.isEmpty) continue;
+      final name = '${model.tableName}_${col.name}_check';
+      columnDefs.add('  CONSTRAINT ${_quoteIdent(name)} CHECK ($expr)');
     }
 
     buffer.writeln(columnDefs.join(',\n'));
@@ -773,13 +1123,25 @@ class SchemaDiffer {
     return buffer.toString();
   }
 
-  /// Generate column definition SQL
-  String _generateColumnDefinition(ColumnDefinition column) {
+  /// Generate column definition SQL. [useOld] picks which schema
+  /// snapshot to resolve a foreign key's target primary key against -
+  /// `true` for columns being dropped/rolled-back (they referenced the
+  /// old schema), `false` (default) for columns being added.
+  String _generateColumnDefinition(ColumnDefinition column,
+      {bool useOld = false}) {
     final buffer = StringBuffer();
 
     if (column.type == ColumnType.foreignKey) {
-      buffer
-          .write('${_quoteIdent('${column.name}_id')} ${column.postgresType}');
+      final models = useOld ? _oldModelsByName : _newModelsByName;
+      final refPk = models[column.relationship?.references]?.primaryKey;
+      final refType = refPk?.effectivePostgresType ?? 'BIGINT';
+      buffer.write('${_quoteIdent(column.physicalColumnName)} $refType');
+    } else if (column.constraints.isPrimary &&
+        (column.type == ColumnType.integer ||
+            column.type == ColumnType.bigint)) {
+      // Match sql_emitter: an implicit/explicit INTEGER/BIGINT primary
+      // key is always auto-incrementing.
+      buffer.write('${_quoteIdent(column.name)} BIGSERIAL');
     } else {
       buffer.write('${_quoteIdent(column.name)} ${column.postgresType}');
     }
@@ -797,11 +1159,14 @@ class SchemaDiffer {
     }
 
     if (column.constraints.defaultValue != null) {
-      buffer.write(' DEFAULT ${column.constraints.defaultValue}');
+      buffer.write(' DEFAULT ${_formatDefault(column)}');
     }
 
     return buffer.toString();
   }
+
+  // Note: column-level CHECK expression changes are handled via
+  // `_compareChecks` using synthesized constraint names.
 
   /// Generate migration file from diff
   Future<void> generateMigrationFile(

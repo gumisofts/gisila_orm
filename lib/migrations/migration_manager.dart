@@ -157,11 +157,7 @@ class MigrationManager {
     final ranThis = <Migration>[];
     for (final migration in pending) {
       await _db.transaction((tx) async {
-        final upSqls = migration.upSql
-            .split(';')
-            .map((s) => s.trim())
-            .where((s) => s.isNotEmpty);
-        for (final sql in upSqls) {
+        for (final sql in splitSqlStatements(migration.upSql)) {
           await tx.execute(sql);
         }
 
@@ -221,11 +217,7 @@ class MigrationManager {
           );
         }
         await _db.transaction((tx) async {
-          final downSqls = migration.downSql
-              .split(';')
-              .map((s) => s.trim())
-              .where((s) => s.isNotEmpty);
-          for (final sql in downSqls) {
+          for (final sql in splitSqlStatements(migration.downSql)) {
             await tx.execute(sql);
           }
           await tx.execute(
@@ -243,4 +235,31 @@ class MigrationManager {
     final slash = basePath.lastIndexOf(Platform.pathSeparator);
     return slash < 0 ? basePath : basePath.substring(slash + 1);
   }
+}
+
+/// Split a multi-statement SQL script into executable statements.
+///
+/// Line comments (`-- …`) are stripped first so a semicolon inside a
+/// comment cannot produce a bogus fragment like `rename to …`. Nested
+/// `BEGIN`/`COMMIT` wrappers are skipped because [MigrationManager]
+/// already runs each migration inside its own transaction.
+List<String> splitSqlStatements(String sql) {
+  final withoutLineComments = sql
+      .split('\n')
+      .map((line) {
+        final idx = line.indexOf('--');
+        if (idx < 0) return line;
+        return line.substring(0, idx);
+      })
+      .join('\n');
+
+  return withoutLineComments
+      .split(';')
+      .map((s) => s.trim())
+      .where((s) => s.isNotEmpty)
+      .where((s) {
+        final upper = s.toUpperCase();
+        return upper != 'BEGIN' && upper != 'COMMIT';
+      })
+      .toList();
 }
