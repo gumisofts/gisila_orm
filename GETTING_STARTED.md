@@ -237,12 +237,11 @@ custom table names lives in the [README's schema section](README.md#schema-yaml-
 Run the gisila code generator:
 
 ```bash
-dart run gisila:generate
-# equivalent to:
-dart run build_runner build --delete-conflicting-outputs
+dart run gisila_orm:generate
 ```
 
-You'll see three new files appear next to your YAML:
+With one schema file you'll see three new files appear next to your YAML
+(the source stem is preserved):
 
 ```
 lib/models/
@@ -251,6 +250,12 @@ lib/models/
 ├── blog.gisila.up.sql        # ← CREATE TABLE statements
 └── blog.gisila.down.sql      # ← paired DROP TABLE statements
 ```
+
+If you later split models across multiple `*.gisila.yaml` files, the same
+command emits a shared bundle instead (`schema.gisila.g.dart` + up/down
+SQL under `lib/models/`). Cross-file relations work; import
+`models/schema.gisila.g.dart`. See the README
+[Multi-file schemas](README.md#multi-file-schemas) section.
 
 Open `blog.gisila.g.dart`. Each YAML model produced:
 
@@ -270,11 +275,9 @@ Also commit `lib/models/blog.gisila.g.dart` and the two `.sql` files to
 your repo. They are deterministic outputs of the YAML; CI re-generation is
 useful as a drift check, not as a build step.
 
-While iterating, you can keep the generator running:
-
-```bash
-dart run build_runner watch
-```
+While iterating on a **single-file** schema you can also use
+`dart run build_runner watch`. Multi-file projects should re-run
+`dart run gisila_orm:generate` after YAML edits.
 
 ---
 
@@ -427,6 +430,26 @@ Predicate operators you'll reach for most often (all on `ColumnRef<T>`):
 `.eq` / `.neq` / `.gt` / `.gte` / `.lt` / `.lte` / `.like` / `.ilike` /
 `.inList` / `.between(a, b)` / `.isNull` / `.isNotNull`. Combine with
 `.and`, `.or`, `.not`. Compare two columns with `colA.eqExpr(colB)`.
+
+Array columns are declared in YAML (e.g. `type: varchar[]`) and generate
+`List<T>` fields plus `ColumnRef<List<T>>`, so containment works:
+
+```yaml
+Post:
+  columns:
+    tags:
+      type: varchar[]
+      default: '{}'
+```
+
+```dart
+await Query<Post>(PostTable.metadata)
+    .where(PostTable.tags.contains(['dart', 'orm']))
+    .all(db);
+```
+
+Enums, CHECK constraints, and geometric columns (`point` / `box` / …) are
+documented in the [README schema reference](README.md#schema-yaml-reference).
 
 For the full operator catalogue (JSON navigation, array containment,
 joins, group-by/having, raw SQL escape hatch), see the
@@ -762,12 +785,15 @@ blog_demo/
 
 Conventions worth keeping:
 
-- **One YAML per logical schema.** Multiple `*.gisila.yaml` files are
-  allowed — the builder processes each one independently. Typical split:
-  one per bounded context.
+- **One YAML per bounded context (optional).** Multiple `*.gisila.yaml`
+  files are merged into one project schema so `Post.author → User` can
+  span files. Multi-file apps import `schema.gisila.g.dart`; single-file
+  apps keep the stem (`blog.gisila.g.dart`).
 - **Generated code is committed.** Treat `*.g.dart` and the two `*.sql`
   files as build artefacts that go into the repo, not throwaways. CI
-  re-runs `dart run gisila:generate` and fails if anything diverges.
+  re-runs `dart run gisila_orm:generate` and fails if anything diverges.
+  After switching to multi-file, delete old per-file `*.gisila.g.dart` /
+  `.sql` next to the split YAML sources.
 - **Hand-written migrations live in their own directory.** Keep them
   numbered (`0001_…`, `0002_…`) so the migration runner picks them up in
   a stable order.

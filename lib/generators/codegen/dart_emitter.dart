@@ -24,6 +24,11 @@ String emitDart(SchemaDefinition schema) {
     ..writeln("import 'package:gisila_orm/gisila.dart';")
     ..writeln();
 
+  for (final e in schema.enums) {
+    buf.writeln(_emitEnum(e));
+    buf.writeln();
+  }
+
   for (final model in schema.models) {
     buf
       ..writeln(_emitModelClass(model, schema))
@@ -34,6 +39,27 @@ String emitDart(SchemaDefinition schema) {
       ..writeln();
   }
 
+  return buf.toString();
+}
+
+String _emitEnum(EnumDefinition e) {
+  final buf = StringBuffer()
+    ..writeln('enum ${e.name} {')
+    ..writeln('  ${e.values.join(',\n  ')},')
+    ..writeln('}')
+    ..writeln()
+    ..writeln('extension ${e.name}Gisila on ${e.name} {')
+    ..writeln('  /// Postgres ENUM label for this value.')
+    ..writeln('  String get sqlValue => name;')
+    ..writeln()
+    ..writeln('  static ${e.name} parse(String raw) {')
+    ..writeln('    for (final v in ${e.name}.values) {')
+    ..writeln('      if (v.name == raw) return v;')
+    ..writeln('    }')
+    ..writeln(
+        "    throw FormatException('Unknown ${e.name} value: \$raw');")
+    ..writeln('  }')
+    ..writeln('}');
   return buf.toString();
 }
 
@@ -50,10 +76,10 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
   // Fields ----------------------------------------------------------------
   for (final col in fields) {
     if (col.type == ColumnType.foreignKey) {
-      final idType = col.constraints.isNull ? 'int?' : 'int';
-      buf.writeln('  final $idType ${_camel(col.name)}Id;');
+      final idType = _dartTypeFor(_fkTargetColumn(col, schema));
+      buf.writeln('  final $idType ${col.dartFieldName};');
     } else {
-      buf.writeln('  final ${_dartTypeFor(col)} ${_camel(col.name)};');
+      buf.writeln('  final ${_dartTypeFor(col)} ${col.dartFieldName};');
     }
   }
 
@@ -66,11 +92,7 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
   for (final col in fields) {
     final required = !col.constraints.isNull && !col.constraints.isPrimary;
     final keyword = required ? 'required ' : '';
-    if (col.type == ColumnType.foreignKey) {
-      buf.writeln('    ${keyword}this.${_camel(col.name)}Id,');
-    } else {
-      buf.writeln('    ${keyword}this.${_camel(col.name)},');
-    }
+    buf.writeln('    ${keyword}this.${col.dartFieldName},');
   }
   buf.writeln('  });');
 
@@ -80,12 +102,12 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
     ..writeln('  factory ${model.name}.fromRow(Map<String, dynamic> row) =>')
     ..writeln('      ${model.name}(');
   for (final col in fields) {
-    final dbName =
-        col.type == ColumnType.foreignKey ? "${col.name}_id" : col.name;
-    final dartName = col.type == ColumnType.foreignKey
-        ? '${_camel(col.name)}Id'
-        : _camel(col.name);
-    final coercion = _coerce("row['$dbName']", col, primaryKeyNullable: true);
+    final dbName = col.physicalColumnName;
+    final dartName = col.dartFieldName;
+    final coerceCol =
+        col.type == ColumnType.foreignKey ? _fkTargetColumn(col, schema) : col;
+    final coercion =
+        _coerce("row['$dbName']", coerceCol, primaryKeyNullable: true);
     buf.writeln('        $dartName: $coercion,');
   }
   buf.writeln('      );');
@@ -95,11 +117,8 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
     ..writeln()
     ..writeln('  Map<String, dynamic> toRow() => {');
   for (final col in fields) {
-    final dbName =
-        col.type == ColumnType.foreignKey ? "${col.name}_id" : col.name;
-    final dartName = col.type == ColumnType.foreignKey
-        ? '${_camel(col.name)}Id'
-        : _camel(col.name);
+    final dbName = col.physicalColumnName;
+    final dartName = col.dartFieldName;
     final encoded = _encode(dartName, col);
     buf.writeln("        '$dbName': $encoded,");
   }
@@ -126,22 +145,62 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
     ..writeln()
     ..writeln('  ${model.name} copyWith({');
   for (final col in fields) {
-    final base = col.type == ColumnType.foreignKey ? 'int' : _dartTypeFor(col);
+    final base = col.type == ColumnType.foreignKey
+        ? _baseDartType(_fkTargetColumn(col, schema))
+        : _dartTypeFor(col);
     final type = base.endsWith('?') ? base : '$base?';
-    final name = col.type == ColumnType.foreignKey
-        ? '${_camel(col.name)}Id'
-        : _camel(col.name);
+    final name = col.dartFieldName;
     buf.writeln('    $type $name,');
   }
   buf.writeln('  }) =>');
   buf.writeln('      ${model.name}(');
   for (final col in fields) {
-    final name = col.type == ColumnType.foreignKey
-        ? '${_camel(col.name)}Id'
-        : _camel(col.name);
+    final name = col.dartFieldName;
     buf.writeln('        $name: $name ?? this.$name,');
   }
   buf.writeln('      );');
+
+  // validate --------------------------------------------------------------
+  // Model-side checks for `allow_blank: false` on string columns.
+  final blankChecked = fields
+      .where((c) =>
+          !c.constraints.allowBlank &&
+          (c.type == ColumnType.varchar ||
+              c.type == ColumnType.text ||
+              c.type == ColumnType.uuid))
+      .toList();
+  buf
+    ..writeln()
+    ..writeln('  /// Returns validation errors for this instance.')
+    ..writeln('  ///')
+    ..writeln(
+        '  /// Currently checks `allow_blank: false` string columns; empty')
+    ..writeln('  /// when every such field is non-blank (or null).')
+    ..writeln('  List<String> validate() {')
+    ..writeln('    final errors = <String>[];');
+  for (final col in blankChecked) {
+    final name = col.dartFieldName;
+    final nullable = col.constraints.isNull || col.constraints.isPrimary;
+    if (nullable) {
+      buf
+        ..writeln('    {')
+        ..writeln('      final value = $name;')
+        ..writeln('      if (value != null && value.trim().isEmpty) {')
+        ..writeln(
+            "        errors.add('${model.name}.$name must not be blank');")
+        ..writeln('      }')
+        ..writeln('    }');
+    } else {
+      buf
+        ..writeln('    if ($name.trim().isEmpty) {')
+        ..writeln(
+            "      errors.add('${model.name}.$name must not be blank');")
+        ..writeln('    }');
+    }
+  }
+  buf
+    ..writeln('    return errors;')
+    ..writeln('  }');
 
   // Static relations ------------------------------------------------------
   // Forward relations declared on this model (belongs-to + many-to-many).
@@ -149,22 +208,28 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
 
   for (final col in model.foreignKeyColumns) {
     final ref = col.relationship!.references!;
-    final fkColumn = '${col.name}_id';
-    final relName = _camel(col.name);
+    final fkColumn = col.physicalColumnName;
+    // Relation accessor uses the logical YAML name (author → author),
+    // not the physical FK field (authorId).
+    final relName = _camel(col.name.endsWith('_id')
+        ? col.name.substring(0, col.name.length - 3)
+        : col.name);
+    final relAccessor = relName.isEmpty ? _camel(col.name) : relName;
     buf
       ..writeln()
-      ..writeln('  static final Relation<${model.name}, $ref> $relName =')
+      ..writeln(
+          '  static final Relation<${model.name}, $ref> $relAccessor =')
       ..writeln('      BelongsToRelation<${model.name}, $ref>(')
       ..writeln("        parentTable: '${model.tableName}',")
       ..writeln("        childTable: '${_tableOf(ref, schema)}',")
-      ..writeln("        name: '$relName',")
+      ..writeln("        name: '$relAccessor',")
       ..writeln("        parentForeignKey: '$fkColumn',")
       ..writeln('        childMeta: ${ref}Table.metadata,')
       ..writeln('      );');
     relationDescriptors.add(_RelationEmit(
       kind: RelationKind.belongsTo,
       childType: ref,
-      relationName: relName,
+      relationName: relAccessor,
     ));
   }
 
@@ -223,13 +288,19 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
         relationName: relName,
       ));
     } else {
-      final fkColumn = '${inverse.fromColumn}_id';
+      final fkColumn = inverse.physicalFromColumn;
+      final useHasOne = inverse.isUnique;
+      final relationClass =
+          useHasOne ? 'HasOneRelation' : 'HasManyRelation';
+      final kind =
+          useHasOne ? RelationKind.hasOne : RelationKind.hasMany;
       buf
         ..writeln()
         ..writeln(
             '  static final Relation<${model.name}, ${inverse.fromModel}> '
             '$relName =')
-        ..writeln('      HasManyRelation<${model.name}, ${inverse.fromModel}>(')
+        ..writeln(
+            '      $relationClass<${model.name}, ${inverse.fromModel}>(')
         ..writeln("        parentTable: '${model.tableName}',")
         ..writeln(
             "        childTable: '${_tableOf(inverse.fromModel, schema)}',")
@@ -238,7 +309,7 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
         ..writeln('        childMeta: ${inverse.fromModel}Table.metadata,')
         ..writeln('      );');
       relationDescriptors.add(_RelationEmit(
-        kind: RelationKind.hasMany,
+        kind: kind,
         childType: inverse.fromModel,
         relationName: relName,
       ));
@@ -297,13 +368,10 @@ String _emitTableClass(ModelDefinition model, SchemaDefinition schema) {
   for (final col in model.columns) {
     if (col.type == ColumnType.manyToMany) continue;
     final dartType = col.type == ColumnType.foreignKey
-        ? (col.constraints.isNull ? 'int?' : 'int')
+        ? _dartTypeFor(_fkTargetColumn(col, schema))
         : _dartTypeFor(col);
-    final dbColumn =
-        col.type == ColumnType.foreignKey ? '${col.name}_id' : col.name;
-    final fieldName = col.type == ColumnType.foreignKey
-        ? '${_camel(col.name)}Id'
-        : _camel(col.name);
+    final dbColumn = col.physicalColumnName;
+    final fieldName = col.dartFieldName;
     buf.writeln(
       '  static const ColumnRef<$dartType> $fieldName = ColumnRef<$dartType>(',
     );
@@ -316,8 +384,7 @@ String _emitTableClass(ModelDefinition model, SchemaDefinition schema) {
   // TableMeta
   final cols = model.columns
       .where((c) => c.type != ColumnType.manyToMany)
-      .map((c) =>
-          c.type == ColumnType.foreignKey ? "'${c.name}_id'" : "'${c.name}'")
+      .map((c) => "'${c.physicalColumnName}'")
       .join(', ');
   final pk = model.primaryKey?.name ?? 'id';
   buf
@@ -360,10 +427,9 @@ List<RelationshipInfo> _inversesFor(
 
 String _coerce(String expr, ColumnDefinition col,
     {bool primaryKeyNullable = false}) {
-  // FK columns always come back as int (or null).
-  if (col.type == ColumnType.foreignKey) {
-    return col.constraints.isNull ? '$expr as int?' : '$expr as int';
-  }
+  // Callers map foreign-key columns to their target's primary-key type
+  // via `_fkTargetColumn` before reaching here, so `col.type` is never
+  // `ColumnType.foreignKey` in this function.
 
   // Primary keys are nullable in the in-memory model (DB-generated on
   // insert), but `fromRow` is only ever called with a real persisted row
@@ -399,10 +465,59 @@ String _coerce(String expr, ColumnDefinition col,
       return '$expr is Vector ? $expr as Vector : '
           '($expr is List ? Vector.fromList(($expr as List).cast<num>()) : '
           'Vector.parse($expr.toString()))';
+    case ColumnType.array:
+      final elem = col.array?.elementDartType ?? 'Object';
+      final cast = _arrayElementCast(elem);
+      if (nullable) {
+        return '$expr == null ? null : ($expr is List '
+            '? ($expr as List).map((e) => $cast).toList().cast<$elem>() '
+            ': <$elem>[])';
+      }
+      return '$expr is List '
+          '? ($expr as List).map((e) => $cast).toList().cast<$elem>() '
+          ': <$elem>[]';
+    case ColumnType.enumType:
+      final name = col.enumConfig!.enumName;
+      if (nullable) {
+        return '$expr == null ? null : ${name}Gisila.parse($expr.toString())';
+      }
+      return '${name}Gisila.parse($expr.toString())';
+    case ColumnType.point:
+      return _geoCoerce(expr, 'Point', nullable);
+    case ColumnType.box:
+      return _geoCoerce(expr, 'Box', nullable);
+    case ColumnType.circle:
+      return _geoCoerce(expr, 'Circle', nullable);
+    case ColumnType.lseg:
+      return _geoCoerce(expr, 'Lseg', nullable);
     default:
       final base = _baseDartType(col);
       return '$expr as $base${nullable ? '?' : ''}';
   }
+}
+
+String _arrayElementCast(String elemDart) {
+  switch (elemDart) {
+    case 'int':
+      return '(e is num ? (e as num).toInt() : int.parse(e.toString()))';
+    case 'double':
+      return '(e is num ? (e as num).toDouble() : double.parse(e.toString()))';
+    case 'bool':
+      return '(e is bool ? e as bool : e.toString() == \'true\')';
+    case 'DateTime':
+      return '(e is DateTime ? e as DateTime : DateTime.parse(e.toString()))';
+    default:
+      return 'e.toString()';
+  }
+}
+
+String _geoCoerce(String expr, String typeName, bool nullable) {
+  if (nullable) {
+    return '$expr == null ? null : ($expr is $typeName ? $expr as $typeName : '
+        '$typeName.fromString($expr.toString()))';
+  }
+  return '$expr is $typeName ? $expr as $typeName : '
+      '$typeName.fromString($expr.toString())';
 }
 
 /// Dart field type honoring nullability and the PK-is-nullable rule.
@@ -418,8 +533,39 @@ String _baseDartType(ColumnDefinition col) {
   return t.endsWith('?') ? t.substring(0, t.length - 1) : t;
 }
 
+/// The column that governs how a foreign-key column [col] round-trips
+/// in Dart: same name/nullability as [col], but the *type* of the
+/// referenced model's primary key - so a `uuid` id becomes `String`, a
+/// plain integer id becomes `int`, etc. This lets [_dartTypeFor] and
+/// [_coerce] handle FK columns without any FK-specific branching.
+ColumnDefinition _fkTargetColumn(
+    ColumnDefinition col, SchemaDefinition schema) {
+  final pk = schema.getModel(col.relationship!.references!)?.primaryKey;
+  return ColumnDefinition(
+    name: col.name,
+    type: pk?.type ?? ColumnType.bigint,
+    constraints: col.constraints,
+    vector: pk?.vector,
+  );
+}
+
 String _encode(String fieldName, ColumnDefinition col) {
   switch (col.type) {
+    case ColumnType.enumType:
+      final nullable = col.constraints.isNull;
+      if (nullable) {
+        return '$fieldName?.sqlValue';
+      }
+      return '$fieldName.sqlValue';
+    case ColumnType.point:
+    case ColumnType.box:
+    case ColumnType.circle:
+    case ColumnType.lseg:
+      final nullable = col.constraints.isNull;
+      if (nullable) {
+        return '$fieldName?.toSqlLiteral()';
+      }
+      return '$fieldName.toSqlLiteral()';
     case ColumnType.timestamp:
     case ColumnType.date:
       return fieldName; // postgres driver handles DateTime natively.

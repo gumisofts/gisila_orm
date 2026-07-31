@@ -11,6 +11,12 @@ String _resolvedTable(String modelName, SchemaDefinition schema) =>
     schema.getModel(modelName)?.tableName ??
     _pluralSnakeCase(_toSnakeCase(modelName));
 
+/// Primary key of the model named [modelName], or `null` if the model
+/// doesn't exist (shouldn't happen once schema validation passes -
+/// `unknown_reference` catches dangling references first).
+ColumnDefinition? _primaryKeyOf(String modelName, SchemaDefinition schema) =>
+    schema.getModel(modelName)?.primaryKey;
+
 String _pluralSnakeCase(String s) {
   if (s.endsWith('s') ||
       s.endsWith('x') ||
@@ -56,9 +62,17 @@ String emitUpSql(SchemaDefinition schema) {
       ..writeln();
   }
 
+  for (final e in schema.enums) {
+    final values = e.values.map((v) => "'$v'").join(', ');
+    buf
+      ..writeln(
+          'CREATE TYPE "${e.postgresTypeName}" AS ENUM ($values);')
+      ..writeln();
+  }
+
   for (final model in schema.models) {
     buf
-      ..writeln(_createTableSql(model))
+      ..writeln(_createTableSql(model, schema))
       ..writeln();
   }
 
@@ -95,6 +109,17 @@ String emitUpSql(SchemaDefinition schema) {
     }
   }
 
+  // Named table-level CHECK constraints (column-level CHECKs are inline).
+  for (final model in schema.models) {
+    for (final check in model.checks) {
+      buf.writeln(
+        'ALTER TABLE "${model.tableName}" '
+        'ADD CONSTRAINT "${check.name}" CHECK (${check.expression});',
+      );
+    }
+    if (model.checks.isNotEmpty) buf.writeln();
+  }
+
   buf.writeln('COMMIT;');
   return buf.toString();
 }
@@ -127,7 +152,17 @@ String emitDownSql(SchemaDefinition schema) {
   }
 
   for (final model in schema.models.reversed) {
+    for (final check in model.checks.reversed) {
+      buf.writeln(
+        'ALTER TABLE "${model.tableName}" '
+        'DROP CONSTRAINT IF EXISTS "${check.name}";',
+      );
+    }
     buf.writeln('DROP TABLE IF EXISTS "${model.tableName}" CASCADE;');
+  }
+
+  for (final e in schema.enums.reversed) {
+    buf.writeln('DROP TYPE IF EXISTS "${e.postgresTypeName}";');
   }
 
   buf
@@ -136,13 +171,21 @@ String emitDownSql(SchemaDefinition schema) {
   return buf.toString();
 }
 
-String _createTableSql(ModelDefinition model) {
+String _createTableSql(ModelDefinition model, SchemaDefinition schema) {
   final buf = StringBuffer('CREATE TABLE "${model.tableName}" (\n');
   final pieces = <String>[];
 
   for (final col in model.columns) {
     if (col.type == ColumnType.manyToMany) continue;
-    pieces.add('  ${_columnDefSql(col, model)}');
+    pieces.add('  ${_columnDefSql(col, model, schema)}');
+  }
+
+  // Inline column-level CHECKs as table constraints for stable names.
+  for (final col in model.columns) {
+    final expr = col.checkExpression;
+    if (expr == null || expr.isEmpty) continue;
+    final name = '${model.tableName}_${col.name}_check';
+    pieces.add('  CONSTRAINT "$name" CHECK ($expr)');
   }
 
   buf
@@ -157,12 +200,13 @@ String _foreignKeyConstraintSql(
   final buf = StringBuffer();
   for (final col in model.foreignKeyColumns) {
     final ref = col.relationship!.references!;
-    final fkColumn = '${col.name}_id';
+    final fkColumn = col.physicalColumnName;
     final refTable = _resolvedTable(ref, schema);
+    final refPkName = _primaryKeyOf(ref, schema)?.name ?? 'id';
     buf.writeln(
       'ALTER TABLE "${model.tableName}" '
       'ADD CONSTRAINT "${model.tableName}_${col.name}_fkey" '
-      'FOREIGN KEY ("$fkColumn") REFERENCES "$refTable" ("id") '
+      'FOREIGN KEY ("$fkColumn") REFERENCES "$refTable" ("$refPkName") '
       'ON DELETE ${col.relationship!.onDelete ?? 'SET NULL'} '
       'ON UPDATE ${col.relationship!.onUpdate ?? 'CASCADE'};',
     );
@@ -182,11 +226,18 @@ String _dropForeignKeyConstraintSql(
   return buf.toString().trimRight();
 }
 
-String _columnDefSql(ColumnDefinition col, ModelDefinition model) {
-  // Foreign-key columns are stored as <name>_id INTEGER.
+String _columnDefSql(
+    ColumnDefinition col, ModelDefinition model, SchemaDefinition schema) {
+  // Foreign-key columns are stored as `<name>_id` (or `<name>` when it
+  // already ends with `_id`), typed to match whatever the referenced
+  // model's primary key actually is (INTEGER PKs are BIGSERIAL under
+  // the hood, hence `effectivePostgresType`).
   if (col.type == ColumnType.foreignKey) {
     final nullable = col.constraints.isNull ? '' : ' NOT NULL';
-    return '"${col.name}_id" INTEGER$nullable';
+    final unique = col.constraints.isUnique ? ' UNIQUE' : '';
+    final refPk = _primaryKeyOf(col.relationship!.references!, schema);
+    final refType = refPk?.effectivePostgresType ?? 'BIGINT';
+    return '"${col.physicalColumnName}" $refType$nullable$unique';
   }
 
   final buf = StringBuffer('"${col.name}" ');
@@ -207,26 +258,67 @@ String _columnDefSql(ColumnDefinition col, ModelDefinition model) {
   }
 
   if (col.constraints.defaultValue != null) {
-    final formatted = DefaultEngine.instance.formatForSql(
-      col.constraints.defaultValue,
-      col.dartType.replaceAll('?', ''),
-    );
+    final formatted = _formatColumnDefault(col, model);
     buf.write(' DEFAULT $formatted');
   }
 
   return buf.toString();
 }
 
+String _formatColumnDefault(ColumnDefinition col, ModelDefinition model) {
+  final label = '${model.name}.${col.name}';
+  final value = col.constraints.defaultValue;
+  if (col.type == ColumnType.enumType) {
+    final enumType = col.enumConfig!.postgresTypeName;
+    final lit = value.toString().replaceAll("'", "''");
+    return "'$lit'::$enumType";
+  }
+  if (col.type == ColumnType.array) {
+    return DefaultEngine.instance.formatArrayDefault(
+      value,
+      col.array!.pgCast,
+      columnLabel: label,
+    );
+  }
+  if (col.type == ColumnType.point ||
+      col.type == ColumnType.box ||
+      col.type == ColumnType.circle ||
+      col.type == ColumnType.lseg) {
+    final cast = col.type.name;
+    final lit = value.toString().replaceAll("'", "''");
+    return "'$lit'::$cast";
+  }
+  return DefaultEngine.instance.formatForSql(
+    value,
+    col.dartType.replaceAll('?', ''),
+    columnLabel: label,
+  );
+}
+
+/// Resolve a logical YAML column name (as used in `indexes:`) to the
+/// physical SQL column name, rewriting foreign keys to their `_id` form.
+String _physicalIndexColumn(String logicalName, ModelDefinition model) {
+  final col = model.columns.where((c) => c.name == logicalName).firstOrNull;
+  if (col == null) return logicalName;
+  return col.physicalColumnName;
+}
+
 String _junctionTableSql(RelationshipInfo rel, SchemaDefinition schema) {
   final left = _resolvedTable(rel.fromModel, schema);
   final right = _resolvedTable(rel.toModel, schema);
+  final leftPk = _primaryKeyOf(rel.fromModel, schema);
+  final rightPk = _primaryKeyOf(rel.toModel, schema);
+  final leftType = leftPk?.effectivePostgresType ?? 'BIGINT';
+  final rightType = rightPk?.effectivePostgresType ?? 'BIGINT';
+  final leftPkName = leftPk?.name ?? 'id';
+  final rightPkName = rightPk?.name ?? 'id';
   return '''CREATE TABLE "${rel.junctionTableName}" (
-  "${left}_id" INTEGER NOT NULL,
-  "${right}_id" INTEGER NOT NULL,
+  "${left}_id" $leftType NOT NULL,
+  "${right}_id" $rightType NOT NULL,
   "created_at" TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY ("${left}_id", "${right}_id"),
-  FOREIGN KEY ("${left}_id") REFERENCES "$left" ("id") ON DELETE CASCADE,
-  FOREIGN KEY ("${right}_id") REFERENCES "$right" ("id") ON DELETE CASCADE
+  FOREIGN KEY ("${left}_id") REFERENCES "$left" ("$leftPkName") ON DELETE CASCADE,
+  FOREIGN KEY ("${right}_id") REFERENCES "$right" ("$rightPkName") ON DELETE CASCADE
 );''';
 }
 
@@ -241,8 +333,7 @@ String _indexSql(ModelDefinition model) {
     if (col.constraints.isUnique) continue;
     if (col.type == ColumnType.manyToMany) continue;
 
-    final colName =
-        col.type == ColumnType.foreignKey ? '${col.name}_id' : col.name;
+    final colName = col.physicalColumnName;
     final idxName = 'idx_${model.tableName}_$colName';
 
     if (col.type == ColumnType.vector) {
@@ -271,8 +362,9 @@ String _indexSql(ModelDefinition model) {
         // emitting nothing rather than producing invalid SQL.
         continue;
       }
-      final colName = idx.columns.single;
-      final ownerCol = colByName[colName];
+      final logicalName = idx.columns.single;
+      final colName = _physicalIndexColumn(logicalName, model);
+      final ownerCol = colByName[logicalName];
       final distance =
           idx.distance ?? ownerCol?.vector?.distance ?? VectorDistance.l2;
       final method = idx.using!.name;
@@ -284,7 +376,9 @@ String _indexSql(ModelDefinition model) {
     }
 
     final unique = idx.isUnique ? 'UNIQUE ' : '';
-    final cols = idx.columns.map((c) => '"$c"').join(', ');
+    final cols = idx.columns
+        .map((c) => '"${_physicalIndexColumn(c, model)}"')
+        .join(', ');
     buf.writeln(
       'CREATE ${unique}INDEX "${idx.name}" ON "${model.tableName}" ($cols);',
     );

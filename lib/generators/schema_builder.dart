@@ -1,15 +1,23 @@
-/// build_runner [Builder] that consumes `*.gisila.yaml` schema files
-/// and emits the Dart model code (`*.g.dart`) and SQL migration
-/// pair (`*.up.sql` + `*.down.sql`) alongside.
+/// build_runner [Builder] that consumes `*.gisila.yaml` schema files.
+///
+/// **Single-file packages:** emits Dart + SQL beside the input stem
+/// (`blog.gisila.g.dart`, …), matching historical behaviour.
+///
+/// **Multi-file packages:** does not emit (build_runner cannot write a
+/// shared `schema.gisila.*` bundle from multiple inputs). Use
+/// `dart run gisila_orm:generate` instead, which merges all schemas via
+/// [generateProjectSchema].
 library gisila.generators.schema_builder;
 
 import 'dart:async';
 
 import 'package:build/build.dart';
 import 'package:dart_style/dart_style.dart';
+import 'package:gisila_orm/database/postgres/exceptions/exceptions.dart';
 import 'package:gisila_orm/generators/codegen/dart_emitter.dart';
 import 'package:gisila_orm/generators/codegen/sql_emitter.dart';
 import 'package:gisila_orm/generators/schema_parser.dart';
+import 'package:glob/glob.dart';
 
 /// Factory referenced from `build.yaml`.
 Builder schemaBuilder(BuilderOptions _) => SchemaBuilder();
@@ -32,24 +40,43 @@ class SchemaBuilder implements Builder {
   @override
   Future<void> build(BuildStep buildStep) async {
     final input = buildStep.inputId;
-    final yaml = await buildStep.readAsString(input);
 
+    final assets = await buildStep
+        .findAssets(Glob('**.gisila.yaml'))
+        .where((id) => !_isSnapshotAsset(id.path))
+        .toList();
+    final ymlAssets = await buildStep
+        .findAssets(Glob('**.gisila.yml'))
+        .where((id) => !_isSnapshotAsset(id.path))
+        .toList();
+    final all = [...assets, ...ymlAssets]
+      ..sort((a, b) => a.path.compareTo(b.path));
+
+    if (all.length > 1) {
+      // Only the lexicographically first input logs once; others no-op.
+      if (input == all.first) {
+        log.info(
+          'Multiple *.gisila.yaml files detected (${all.length}). '
+          'build_runner cannot emit a shared project bundle; run '
+          '`dart run gisila_orm:generate` (see project_codegen.dart).',
+        );
+      }
+      return;
+    }
+
+    // Single-file: merge API still used so behaviour matches generate.
+    final yaml = await buildStep.readAsString(input);
     final SchemaDefinition schema;
     try {
-      // Pass the input asset's URI so error spans render the real
-      // file path rather than `<unknown>`.
-      schema = SchemaDefinition.fromYaml(yaml,
-          sourceUrl: Uri.parse(input.uri.toString()));
+      schema = SchemaDefinition.fromYaml(
+        yaml,
+        sourceUrl: Uri.parse(input.uri.toString()),
+      );
     } on SchemaValidationException catch (e) {
-      // Render the rich, span-highlighted diagnostics through
-      // build_runner's logger so the user sees one block per file
-      // with line numbers, carets, and hints. Re-throw to fail the
-      // build cleanly.
       log.severe('\n${e.format()}');
       throw _SchemaBuildException(input.path, e);
     }
 
-    // Dart output ----------------------------------------------------------
     final dartId = _outputId(input, '.gisila.g.dart');
     final raw = emitDart(schema);
     String formatted;
@@ -58,25 +85,31 @@ class SchemaBuilder implements Builder {
           DartFormatter(languageVersion: DartFormatter.latestLanguageVersion)
               .format(raw);
     } catch (_) {
-      // If formatting fails (e.g. malformed generated code), still
-      // write the unformatted output so the user can debug it.
       formatted = raw;
     }
     await buildStep.writeAsString(dartId, formatted);
 
-    // SQL outputs ---------------------------------------------------------
     final upId = _outputId(input, '.gisila.up.sql');
     final downId = _outputId(input, '.gisila.down.sql');
-    await buildStep.writeAsString(upId, emitUpSql(schema));
+    String upSql;
+    try {
+      upSql = emitUpSql(schema);
+    } on DefaultValueException catch (e) {
+      log.severe('\nerror[invalid_default]: ${e.msg}\n --> ${input.path}');
+      throw _SchemaBuildException.withMessage(input.path, e.msg);
+    }
+    await buildStep.writeAsString(upId, upSql);
     await buildStep.writeAsString(downId, emitDownSql(schema));
   }
 
+  bool _isSnapshotAsset(String path) {
+    final lower = path.toLowerCase();
+    return lower.contains('/.gisila/') ||
+        lower.endsWith('/project.gisila.yaml');
+  }
+
   /// Strips the input's full `.gisila.yaml` / `.gisila.yml` suffix and
-  /// appends the requested [newExtension]. We intentionally do not use
-  /// [AssetId.changeExtension] because that operates on the last `.`
-  /// segment only, which would leave the `.gisila` middle segment in
-  /// place and produce `foo.gisila.g.dart` outputs that mismatch the
-  /// `build_extensions` declaration.
+  /// appends the requested [newExtension].
   AssetId _outputId(AssetId input, String newExtension) {
     final path = input.path;
     final lower = path.toLowerCase();
@@ -93,19 +126,25 @@ class SchemaBuilder implements Builder {
 }
 
 /// Raised when [SchemaBuilder] aborts a build because a schema file
-/// failed validation. Wraps the underlying [SchemaValidationException]
-/// so callers (or build hooks) can re-render the diagnostics if they
-/// captured stderr. The detailed message has already been emitted via
-/// `log.severe`; this exception's [toString] returns a short, single
-/// line so build_runner doesn't repeat the full report.
+/// failed validation (or, via [withMessage], because SQL emission hit
+/// an invalid `default:` value).
 class _SchemaBuildException implements Exception {
-  _SchemaBuildException(this.path, this.cause);
+  _SchemaBuildException(this.path, this.cause) : _shortMessage = null;
+
+  _SchemaBuildException.withMessage(this.path, String message)
+      : cause = null,
+        _shortMessage = message;
+
   final String path;
-  final SchemaValidationException cause;
+  final SchemaValidationException? cause;
+  final String? _shortMessage;
 
   @override
   String toString() {
-    final n = cause.errors.length;
+    if (_shortMessage != null) {
+      return 'Schema build failed for $path: $_shortMessage';
+    }
+    final n = cause!.errors.length;
     return 'Schema validation failed for $path '
         '($n ${n == 1 ? "error" : "errors"})';
   }

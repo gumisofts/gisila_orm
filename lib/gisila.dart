@@ -17,6 +17,7 @@ export 'config/config.dart';
 export 'database/extensions.dart';
 export 'database/postgres/core/connections.dart';
 export 'database/postgres/exceptions/exceptions.dart';
+export 'database/postgres/types/geometrics.dart';
 export 'database/postgres/types/mappings.dart';
 export 'database/postgres/types/vector.dart';
 export 'migrations/migrations.dart';

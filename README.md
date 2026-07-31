@@ -29,19 +29,20 @@ final users = await Query<User>(UserTable.metadata)
 4. [End-to-end walkthrough](#end-to-end-walkthrough)
 5. [Schema YAML reference](#schema-yaml-reference)
 6. [Code generation](#code-generation)
-7. [Generated artefacts](#generated-artefacts)
-8. [Database configuration](#database-configuration)
-9. [Connecting and `DbContext`](#connecting-and-dbcontext)
-10. [Building queries](#building-queries)
-11. [Inserts, updates, deletes](#inserts-updates-deletes)
-12. [Transactions](#transactions)
-13. [Eager loading (preload)](#eager-loading-preload)
-14. [Migrations](#migrations)
-15. [CLI reference](#cli-reference)
-16. [Testing your code](#testing-your-code)
-17. [Error handling](#error-handling)
-18. [Architecture](#architecture)
-19. [Roadmap](#roadmap)
+7. [Multi-file schemas](#multi-file-schemas)
+8. [Generated artefacts](#generated-artefacts)
+9. [Database configuration](#database-configuration)
+10. [Connecting and `DbContext`](#connecting-and-dbcontext)
+11. [Building queries](#building-queries)
+12. [Inserts, updates, deletes](#inserts-updates-deletes)
+13. [Transactions](#transactions)
+14. [Eager loading (preload)](#eager-loading-preload)
+15. [Migrations](#migrations)
+16. [CLI reference](#cli-reference)
+17. [Testing your code](#testing-your-code)
+18. [Error handling](#error-handling)
+19. [Architecture](#architecture)
+20. [Roadmap](#roadmap)
 
 ---
 
@@ -50,6 +51,7 @@ final users = await Query<User>(UserTable.metadata)
 | Component | State |
 | --- | --- |
 | Schema YAML + `build_runner` codegen | Ready |
+| Postgres type parity (enums, arrays, CHECK, geometrics, vector) | Ready |
 | Runtime: `Database`, `DbContext`, `Pool`/`Tx` | Ready |
 | Typed `Query<T>` + `Expr<T>` AST | Ready |
 | Eager-loading `Preloader` (HasMany / HasOne / BelongsTo / M2M) | Ready |
@@ -67,7 +69,7 @@ The ORM is the data layer of the wider gisila stack. The HTTP router lives in
 ```
 gisila_orm/
 ├── bin/
-│   ├── generate.dart        # `dart run gisila_orm:generate` → build_runner shim
+│   ├── generate.dart        # `dart run gisila_orm:generate` → project merge codegen
 │   └── migrate.dart         # `dart run gisila_orm:migrate up|down|status`
 ├── lib/
 │   ├── gisila.dart                          # public API barrel
@@ -78,6 +80,8 @@ gisila_orm/
 │   │   ├── types.dart                       # DefaultEngine for default-value SQL
 │   │   └── postgres/
 │   │       ├── core/connections.dart        # Database (pool + tx)
+│   │       ├── types/vector.dart            # pgvector Vector
+│   │       ├── types/geometrics.dart        # Point / Box / Circle / Lseg
 │   │       └── exceptions/                  # PostgresException hierarchy
 │   ├── runtime/
 │   │   ├── db_context.dart                  # PoolDbContext + TxDbContext
@@ -95,14 +99,16 @@ gisila_orm/
 │   │   └── schema_differ.dart               # diff two schemas → up/down SQL
 │   └── generators/
 │       ├── schema_parser.dart               # YAML → SchemaDefinition
-│       ├── schema_builder.dart              # build_runner builder
+│       ├── project_codegen.dart             # discover + merge + emit bundle
+│       ├── schema_builder.dart              # build_runner (single-file)
 │       └── codegen/
 │           ├── dart_emitter.dart            # *.g.dart emitter
 │           └── sql_emitter.dart             # *.up.sql / *.down.sql emitter
 ├── example/
-│   └── models/blog.gisila.yaml              # sample schema (User, Author, Book, Review)
+│   └── models/blog.gisila.yaml              # sample schema (+ enums/arrays/CHECK/geo)
 ├── test/
 │   ├── support/test_db.dart                 # MockDbContext + withTestDb
+│   ├── type_parity_test.dart                # enums / arrays / CHECK / geometrics
 │   ├── query_compiler_test.dart             # golden SQL
 │   ├── preloader_test.dart                  # N+1 prevention
 │   ├── transaction_test.dart                # rollback isolation
@@ -127,8 +133,10 @@ dev_dependencies:
   build_runner: ^2.4.0
 ```
 
-Add a schema file ending in `.gisila.yaml` anywhere under `lib/`, `example/`,
-or `test/`. The `build_runner` builder picks them up automatically.
+Add one or more schema files ending in `.gisila.yaml` under `lib/`,
+`example/`, or `test/`. Prefer `dart run gisila_orm:generate` — it merges
+every file into one project schema (cross-file relations work). For a
+single-file package, `build_runner` still emits beside that file's stem.
 
 ---
 
@@ -170,16 +178,18 @@ Post:
 ### 2. Generate models and migration SQL
 
 ```bash
-dart run build_runner build --delete-conflicting-outputs
-# or, equivalently:
-dart run gisila:generate
+dart run gisila_orm:generate
 ```
 
-This emits, alongside the YAML:
+With a single schema file this emits alongside the YAML (stem preserved):
 
 - `blog.gisila.g.dart` — `Author`, `Post`, `AuthorTable`, `PostTable`, `Author.posts`, `Post.author`, …
 - `blog.gisila.up.sql` — `CREATE TABLE ...` statements
 - `blog.gisila.down.sql` — paired `DROP TABLE ...` statements
+
+With two or more schema files, emit a shared bundle instead:
+`lib/models/schema.gisila.g.dart` (+ `.up.sql` / `.down.sql`). See
+[Multi-file schemas](#multi-file-schemas).
 
 ### 3. Configure the database
 
@@ -243,25 +253,40 @@ Future<void> main() async {
 ### File naming
 
 Every schema file **must** end in `.gisila.yaml` or `.gisila.yml`. Files
-matching this pattern under `lib/`, `test/`, or `example/` are picked up
-automatically by `build_runner`.
+matching this pattern under `lib/`, `test/`, or `example/` are discovered
+by `dart run gisila_orm:generate` (and by the single-file `build_runner`
+builder). All discovered files are merged into one project schema so
+models and enums may reference each other across files.
 
 ### Top-level shape
 
-Each top-level YAML key declares one model (which becomes one table):
+Top-level keys are either:
+
+- `enums:` — optional Postgres ENUM declarations (not a model), or
+- a **PascalCase model name** — one table per model.
 
 ```yaml
+enums:                            # optional; before or alongside models
+  TeamRole:
+    - viewer
+    - admin
+
 ModelName:
-  db_table: optional_custom_table_name  # default: snake_case(ModelName)
+  db_table: optional_custom_table_name  # default: plural snake_case(ModelName)
   columns:
     column_name:
-      type: <built-in or model name>
+      type: <built-in | EnumName | ModelName | foreign_key>
       # ...constraints...
   indexes:
     composite_index_name:
-      columns: [col_a, col_b]
-      unique: true   # optional
+      columns: [col_a, col_b]     # logical YAML names; FKs remap to *_id
+      unique: true                # optional
+  checks:                         # optional named table-level CHECK constraints
+    some_rule:
+      expression: "col_a IS NOT NULL OR col_b > 0"
 ```
+
+Enum names must not collide with model names (`enum_model_collision`).
 
 ### Built-in column types
 
@@ -269,7 +294,7 @@ All column types map to their canonical PostgreSQL type and a Dart type:
 
 | YAML type | Postgres type | Dart type |
 | --- | --- | --- |
-| `varchar` | `VARCHAR(255)` | `String` |
+| `varchar` | `VARCHAR(255)` (or `VARCHAR(n)` with `max_length`) | `String` |
 | `text` | `TEXT` | `String` |
 | `integer` | `INTEGER` | `int` |
 | `bigint` | `BIGINT` | `int` |
@@ -279,25 +304,152 @@ All column types map to their canonical PostgreSQL type and a Dart type:
 | `decimal` | `DECIMAL` | `double` |
 | `json` | `JSONB` | `Map<String, dynamic>` |
 | `uuid` | `UUID` | `String` |
+| `vector` | `VECTOR(n)` (requires pgvector) | `Vector` |
+| `varchar[]`, `integer[]`, … | element type + `[]` | `List<T>` |
+| `point` / `box` / `circle` / `lseg` | geometric type | `Point` / `Box` / `Circle` / `Lseg` |
+| `EnumName` (see `enums:`) | Postgres ENUM | Dart `enum EnumName` |
+| `foreign_key` | FK column typed like the target PK | target PK Dart type |
+
+`vector` columns require `dimensions:` (and optionally `index_method` /
+`distance`). A migration that includes any vector column starts with
+`CREATE EXTENSION IF NOT EXISTS vector;`.
+
+#### Arrays
+
+Declare an array with a scalar builtin plus `[]`:
+
+```yaml
+Post:
+  columns:
+    tags:
+      type: varchar[]
+      is_null: false
+      default: '{}'          # also: '{a,b}' or YAML list [a, b]
+    scores:
+      type: integer[]
+```
+
+| Rule | Detail |
+| --- | --- |
+| Allowed elements | `varchar`, `text`, `integer`, `bigint`, `boolean`, `uuid`, `decimal`, `timestamp`, `date` |
+| Not allowed (v1) | `vector[]`, FK/M2M, nested arrays, array-of-enum |
+| Dart | `List<T>` field + `ColumnRef<List<T>>` |
+| Query | `.contains([...])` (`@>`) and `.overlaps([...])` (`&&`) |
+| `max_length` | Honored on `varchar[]` element type |
+
+#### Enums
+
+```yaml
+enums:
+  TeamRole:
+    - viewer
+    - developer
+    - admin
+    - owner
+
+TeamMember:
+  columns:
+    role:
+      type: TeamRole
+      default: developer       # must be one of the declared values
+      is_null: false
+```
+
+| Layer | Output |
+| --- | --- |
+| SQL up | `CREATE TYPE "team_role" AS ENUM ('viewer', …);` before tables |
+| SQL down | `DROP TYPE` after tables |
+| Dart | `enum TeamRole { … }` plus `TeamRoleGisila.parse` / `.sqlValue` |
+| Differ | New enum → create type; new label → `ALTER TYPE … ADD VALUE IF NOT EXISTS` |
+
+Removing or renaming enum values is **manual** (Postgres cannot drop labels
+safely in the general case). `ADD VALUE` may need to run outside a
+transaction on older Postgres versions — edit generated incremental SQL if
+needed.
+
+#### Geometric columns
+
+```yaml
+Place:
+  columns:
+    location:
+      type: point
+      is_null: false
+    bounds:
+      type: box
+    area:
+      type: circle
+    edge:
+      type: lseg
+```
+
+| YAML | Postgres | Dart | Text form |
+| --- | --- | --- | --- |
+| `point` | `POINT` | `Point` | `(x,y)` |
+| `box` | `BOX` | `Box` | `((x1,y1),(x2,y2))` |
+| `circle` | `CIRCLE` | `Circle` | `<(x,y),r>` |
+| `lseg` | `LSEG` | `Lseg` | `[(x1,y1),(x2,y2)]` |
+
+Types are exported from `package:gisila_orm/gisila.dart`. Bound parameters
+use `::point` / `::box` / etc. casts. Rich geometric operators (`<@`,
+distance, PostGIS) are not generated yet — equality / `isNull` work today.
 
 ### Column constraints
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `is_null` | bool | `true` | Allow `NULL`; if `false`, emits `NOT NULL`. |
-| `is_unique` | bool | `false` | Adds `UNIQUE` constraint. |
+| `is_unique` | bool | `false` | Adds `UNIQUE` constraint. On a belongs-to FK, also makes the inverse relation **HasOne** instead of HasMany. |
 | `is_index` | bool | `false` | Creates `CREATE INDEX idx_<table>_<column>`. |
 | `is_primary` | bool | `false` | Marks column as `PRIMARY KEY`; suppresses the implicit `id` column. |
-| `allow_blank` | bool | `true` | Reserved for upcoming model-side validation. |
-| `default` | any | `null` | SQL default value. Strings are quoted; `NOW()`, `CURRENT_TIMESTAMP`, `CURRENT_DATE`, `CURRENT_TIME` pass through verbatim. |
+| `allow_blank` | bool | `true` | When `false` on a string column, generated models include a `validate()` check that rejects empty/whitespace-only values. |
+| `max_length` | int | `255` (varchar only) | Emits `VARCHAR(n)` instead of `VARCHAR(255)`. |
+| `check` | string | — | Column-level `CHECK (…)` named `{table}_{column}_check`. |
+| `default` | any | `null` | SQL default value. Strings are quoted unless they look like a SQL function call (e.g. `gen_random_uuid()`, `NOW()`, `nextval('seq')`), in which case they pass through verbatim; bare `now` / `NOW` and `CURRENT_TIMESTAMP` / `CURRENT_DATE` / `CURRENT_TIME` also pass through. |
+
+Model-level named checks:
+
+```yaml
+Review:
+  columns:
+    rating:
+      type: integer
+      check: "rating >= 1 AND rating <= 5"
+  checks:
+    review_has_body:
+      expression: "body IS NOT NULL"
+```
+
+Since any `name(...)` shaped default is emitted as-is, a `uuid` column can
+get a real per-row generated value:
+
+```yaml
+Session:
+  columns:
+    id:
+      type: uuid
+      is_primary: true
+      default: gen_random_uuid()   # or uuid_generate_v4() with uuid-ossp
+```
 
 If a model declares no `is_primary` column, gisila inserts an implicit
 `id BIGSERIAL PRIMARY KEY`.
 
 ### Relationships
 
-A column whose `type` is **another model name** (PascalCase, not in the
-built-in list) is treated as a relation.
+A column is treated as a relation when:
+
+1. `type` is **another model name** (PascalCase, not in the built-in list), or
+2. `type: foreign_key` (or `ForeignKey`) **with** a required `references:` target.
+
+Both styles are first-class. The physical FK column is `<name>_id`, unless
+the YAML field already ends with `_id` (so `user_id` stays `"user_id"`, not
+`"user_id_id"`). The column type always matches the **referenced model's
+actual primary key**.
+
+Referential actions default to **`ON DELETE SET NULL`** and
+**`ON UPDATE CASCADE`** when omitted. Override with `on_delete` /
+`on_update` (`NO ACTION`, `RESTRICT`, `CASCADE`, `SET NULL`, `SET DEFAULT`).
 
 #### Many-to-one (`belongsTo`)
 
@@ -311,11 +463,21 @@ Post:
       reverse_name: posts     # creates Author.posts (HasMany on parent side)
       on_delete: SET NULL     # optional; default SET NULL
       on_update: CASCADE      # optional; default CASCADE
+
+# Equivalent foreign_key style (common in apps):
+Employee:
+  columns:
+    user_id:
+      type: foreign_key
+      references: User
+      is_null: false
+      reverse_name: employees
 ```
 
-This emits `author_id INTEGER` on `post`, with a foreign key to `author(id)`.
-On the Dart side you get `Post.author` (BelongsTo) **and** `Author.posts`
-(HasMany), both as static typed `Relation` values usable in `.preload(...)`.
+This emits `author_id` / `user_id` on the child table with a foreign key to
+the parent. On the Dart side you get a BelongsTo relation **and** the
+inverse HasMany (or **HasOne** when the belongs-to column has
+`is_unique: true`), usable in `.preload(...)`.
 
 #### Many-to-many
 
@@ -340,9 +502,13 @@ Review:
   columns: { ... }
   indexes:
     idx_review_book_reviewer:
-      columns: [book, reviewer]
+      columns: [book, reviewer]   # logical YAML names; FKs remap to *_id
       unique: true
 ```
+
+Index `columns:` entries use the **logical** YAML field names. Foreign-key
+fields are automatically rewritten to their physical `*_id` column in the
+emitted SQL.
 
 ### Naming conventions
 
@@ -446,56 +612,116 @@ try {
 
 ## Code generation
 
-The generator is a `build_runner` Builder registered in `build.yaml`:
-
-```yaml
-builders:
-  schemaBuilder:
-    import: "package:gisila_orm/generators/schema_builder.dart"
-    builder_factories: ["schemaBuilder"]
-    build_extensions:
-      ".gisila.yaml":
-        - ".gisila.g.dart"
-        - ".gisila.up.sql"
-        - ".gisila.down.sql"
-    auto_apply: dependents
-    build_to: source
-```
-
-You don't normally edit `build.yaml`. Run:
+**Preferred entrypoint** (single- and multi-file):
 
 ```bash
 dart run gisila_orm:generate
-# equivalent to:
-dart run build_runner build --delete-conflicting-outputs
 ```
 
-Watch mode for development:
+This discovers every `*.gisila.yaml`, merges them via
+`SchemaDefinition.fromProject`, writes one Dart + up/down SQL bundle, and
+diffs the merged schema against `.gisila/schema_snapshots/project.gisila.yaml`
+to emit `auto_project_changes` incremental migrations when needed.
+
+For single-file packages only, the legacy `build_runner` builder still
+works:
 
 ```bash
-dart run build_runner watch
+dart run build_runner build --delete-conflicting-outputs
+# or:
+dart run gisila_orm:generate --build-runner
 ```
+
+Multi-file projects must use `dart run gisila_orm:generate` (without
+`--build-runner`); `build_runner` cannot emit a shared bundle from
+multiple inputs.
+
+---
+
+## Multi-file schemas
+
+Split models across files freely — relations and enums resolve against the
+**merged** project:
+
+```text
+lib/models/
+  user.gisila.yaml       # User, enums: TeamRole
+  post.gisila.yaml       # Post.author → User
+  schema.gisila.g.dart   # GENERATED (all models)
+  schema.gisila.up.sql
+  schema.gisila.down.sql
+```
+
+```yaml
+# post.gisila.yaml
+Post:
+  columns:
+    author:
+      type: User
+      references: User
+      reverse_name: posts
+```
+
+**Outputs**
+
+| Schema files | Bundle location | Stem |
+| --- | --- | --- |
+| Exactly one | Beside that file | Source stem (`blog.gisila.*`) |
+| Two or more | `lib/models/` (created if `lib/` exists); else common parent of the YAML files | Always `schema.gisila.*` |
+
+Import the generated library once:
+
+```dart
+import 'models/schema.gisila.g.dart'; // multi-file
+// or
+import 'models/blog.gisila.g.dart';   // single-file compat
+```
+
+No `part` / `part of` is required. Duplicate model names across files are
+errors (`duplicate_model`); identical enum declarations may be repeated,
+but conflicting values are errors (`duplicate_enum`).
+
+**Migrating from older per-file outputs:** after the first multi-file
+generate, delete leftover `foo.gisila.g.dart` / `.up.sql` / `.down.sql`
+next to split YAML files so you don't keep duplicate model classes.
 
 ---
 
 ## Generated artefacts
 
-For each model `Foo` in your YAML, the generator emits:
+The generator emits one Dart library plus paired migration SQL for the
+merged project schema (stem `blog` or `schema` as above).
+
+### Schema-level enums
+
+For each entry under `enums:`, the `.g.dart` file includes:
+
+```dart
+enum TeamRole { viewer, developer, admin, owner }
+
+extension TeamRoleGisila on TeamRole {
+  String get sqlValue => name;
+  static TeamRole parse(String raw) { /* … */ }
+}
+```
 
 ### `class Foo with Preloadable`
 
-- Final fields for every column.
+- Final fields for every column (including `List<T>` for arrays, enum types,
+  and `Point` / `Box` / … for geometrics).
 - `Foo({...})` constructor; primary keys are nullable in Dart (DB-generated on insert).
 - `factory Foo.fromRow(Map<String, dynamic> row)` — used by the hydrator.
-- `Map<String, dynamic> toRow()` — used by inserts/updates and the preloader.
+- `Map<String, dynamic> toRow()` — used by inserts/updates and the preloader
+  (enums encode via `.sqlValue`; geometrics via `.toSqlLiteral()`).
 - `factory Foo.fromJson` / `Map<String, dynamic> toJson()` — aliases for `fromRow` / `toRow`.
 - `Foo copyWith({...})`.
+- `List<String> validate()` — model-side checks for `allow_blank: false` string columns.
 - `static final Relation<Foo, X> someRelation` — one per declared/inverse relation.
 - `List<X> get someRelationList` (HasMany / M2M) or `X? get someRelationLoaded` (BelongsTo / HasOne) — typed accessors over the preload cache.
 
 ### `class FooTable`
 
-- `static const ColumnRef<T> columnName` for every column — typed handles used in `where(...)` predicates and `orderBy(...)`.
+- `static const ColumnRef<T> columnName` for every column — typed handles used in `where(...)` predicates and `orderBy(...)` (arrays are `ColumnRef<List<T>>`).
 - `static const TableMeta<Foo> metadata` — `Query<Foo>` consumes this.
 
 ### `Query<Foo> foos()`
@@ -505,9 +731,17 @@ so you can write `foos().where(...).all(db)` in code.
 
 ### `*.up.sql` and `*.down.sql`
 
-PostgreSQL DDL for every model (and its junction tables, if any), wrapped in
-a single `BEGIN; ... COMMIT;` block. The down file pairs `DROP TABLE`s in
-reverse dependency order.
+PostgreSQL DDL wrapped in a single `BEGIN; ... COMMIT;` block, in order:
+
+1. `CREATE EXTENSION IF NOT EXISTS vector;` when needed
+2. `CREATE TYPE … AS ENUM` for each schema enum
+3. `CREATE TABLE` (columns, inline column `CHECK`s)
+4. Junction tables for many-to-many
+5. Foreign-key constraints
+6. Indexes
+7. Named model-level `checks:` via `ALTER TABLE … ADD CONSTRAINT`
+
+Down reverses that: drop FKs → drop tables → `DROP TYPE` for enums.
 
 ---
 
@@ -659,9 +893,16 @@ PostTable.userId.eqExpr(UserTable.id)
 UserTable.preferences.field('theme').eq('dark')   // ->
 UserTable.preferences.text('locale').eq('en-US')  // ->>
 
-// Postgres array containment / overlap:
-UserTable.tags.contains(['admin'])      // @>
-UserTable.tags.overlaps(['admin', 'mod'])  // &&
+// Postgres array containment / overlap (requires type: varchar[] etc.):
+PostTable.tags.contains(['admin'])         // @>
+PostTable.tags.overlaps(['admin', 'mod'])  // &&
+
+// Enums compare as their SQL labels once parsed into Dart enums:
+TeamMemberTable.role.eq(TeamRole.admin)
+
+// Geometric columns support equality / null checks (rich ops TBD):
+PlaceTable.location.eq(Point(1.0, 2.0))
+PlaceTable.bounds.isNull
 
 // Composition:
 final q = UserTable.isActive.eq(true).and(UserTable.age.gt(18))
@@ -924,10 +1165,12 @@ await SchemaDiffer().generateMigrationFile(diff, 'migrations/', 'add_users');
 
 ## CLI reference
 
-### `dart run gisila_orm:generate [build_runner args]`
+### `dart run gisila_orm:generate`
 
-Thin shim around `dart run build_runner build`. Adds
-`--delete-conflicting-outputs` by default; pass `--no-delete` to opt out.
+Merges all `*.gisila.yaml` files and writes the project bundle + optional
+`auto_project_changes` incremental migration. Pass `--build-runner` to
+invoke the legacy single-file `build_runner` builder instead (adds
+`--delete-conflicting-outputs` by default; `--no-delete` to opt out).
 
 ### `dart run gisila_orm:migrate <up|down|status> [flags]`
 
@@ -1020,6 +1263,9 @@ try {
   print('duplicate row: ${e.message}');
 } on PostgresForeignKeyViolationException catch (e) {
   print('FK violation: ${e.message}');
+} on PostgresCheckViolationException catch (e) {
+  // SQLSTATE 23514 — column `check:` / model `checks:` failures
+  print('CHECK failed: ${e.message}');
 } on PostgresException catch (e) {
   // sqlState (5-char SQLSTATE), errorCode, query, details all available
   print('db error ${e.sqlState}: ${e.message}');
@@ -1036,10 +1282,13 @@ transaction.
 
 ```mermaid
 graph TD
-  YAML[*.gisila.yaml] --> Builder[build_runner: SchemaBuilder]
-  Builder --> Dart[*.gisila.g.dart<br/>User, UserTable, User.posts]
-  Builder --> Up[*.gisila.up.sql]
-  Builder --> Down[*.gisila.down.sql]
+  YAML[*.gisila.yaml files] --> Merge[fromProject merge]
+  Merge --> Gen[gisila_orm:generate]
+  Gen --> Dart[schema.gisila.g.dart<br/>or stem.gisila.g.dart]
+  Gen --> Up[*.gisila.up.sql]
+  Gen --> Down[*.gisila.down.sql]
+  Gen --> Snap[.gisila/.../project.gisila.yaml]
+  Snap --> Differ[SchemaDiffer]
 
   App[user code] --> Q[Query&lt;T&gt;]
   Dart --> Q
@@ -1054,6 +1303,7 @@ graph TD
   Preloader --> Q
 
   Up --> Mig[MigrationManager]
+  Differ --> Mig
   Mig --> PG
 ```
 
@@ -1061,6 +1311,30 @@ Single invariant: **every** SQL statement that hits Postgres is built by
 `SqlCompiler` from a typed AST and binds parameters with `$n`
 placeholders, never `?`. There is one query pipeline; the
 `package:postgres` driver pool is the only pool.
+
+---
+
+## Roadmap
+
+### Shipped
+
+- Schema-driven Postgres ORM: YAML → Dart models + up/down SQL + migrations
+- Relations: BelongsTo / HasMany / HasOne (unique FK) / many-to-many + preload
+- Vector columns (pgvector), `foreign_key` alias, `max_length`, `allow_blank` → `validate()`
+- FK physical naming (no `user_id_id`), index remap for logical FK names
+- `default: now` / function defaults via `DefaultEngine` (including SchemaDiffer)
+- **Type parity:** `enums:`, arrays (`varchar[]`…), CHECK (`check:` / `checks:`), geometrics (`point`/`box`/`circle`/`lseg`)
+
+See [`example/models/blog.gisila.yaml`](example/models/blog.gisila.yaml) for a
+schema that exercises enums, arrays, CHECK, and `point`/`box`.
+
+### Still open
+
+- Partial/expression indexes; decimal precision/scale
+- Composite primary keys; multi-column vector indexes (emit a hard error)
+- Rich geometric operators / PostGIS; array-of-enum; GIN auto-indexes
+- Soft-delete / timestamp macros as first-class YAML
+- Non-PostgreSQL backends (`DatabaseType` reserved only)
 
 ---
 

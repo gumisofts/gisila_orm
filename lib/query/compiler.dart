@@ -6,6 +6,7 @@
 library gisila.query.compiler;
 
 import 'package:gisila_orm/database/extensions.dart';
+import 'package:gisila_orm/database/postgres/types/geometrics.dart';
 import 'package:gisila_orm/database/postgres/types/vector.dart';
 import 'package:gisila_orm/query/expression.dart';
 
@@ -42,8 +43,41 @@ class SqlCompiler implements ExprVisitor<String> {
       _params.add(value.toSqlLiteral());
       return '\$${_params.length}::vector';
     }
+    if (value is Point) {
+      _params.add(value.toSqlLiteral());
+      return '\$${_params.length}::point';
+    }
+    if (value is Box) {
+      _params.add(value.toSqlLiteral());
+      return '\$${_params.length}::box';
+    }
+    if (value is Circle) {
+      _params.add(value.toSqlLiteral());
+      return '\$${_params.length}::circle';
+    }
+    if (value is Lseg) {
+      _params.add(value.toSqlLiteral());
+      return '\$${_params.length}::lseg';
+    }
+    if (value is List) {
+      // Postgres array: bind as text `{…}` with a generic cast; callers
+      // that need a specific element cast should prefer typed helpers.
+      _params.add(_listToPgArrayLiteral(value));
+      return '\$${_params.length}';
+    }
     _params.add(value);
     return '\$${_params.length}';
+  }
+
+  /// Encode a Dart [List] as a Postgres array text literal (`{a,b}`).
+  static String _listToPgArrayLiteral(List<dynamic> values) {
+    final parts = values.map((e) {
+      if (e == null) return 'NULL';
+      if (e is num || e is bool) return e.toString();
+      final s = e.toString().replaceAll('\\', '\\\\').replaceAll('"', '\\"');
+      return '"$s"';
+    }).join(',');
+    return '{$parts}';
   }
 
   /// Compile an expression into a SQL fragment.

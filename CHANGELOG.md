@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- Migrations: strip `--` line comments before splitting a script into statements. Previously a semicolon inside a comment truncated the comment and fed its remainder to PostgreSQL as a statement, failing the migration with a syntax error.
+- Migrations: skip bare `BEGIN` / `COMMIT` statements, since `MigrationManager` already wraps each migration in its own transaction.
+- Schema differ: fix UUID foreign-key diffs so a belongs-to column matches the referenced model's actual primary key type instead of a hardcoded `int`.
+
 ## 0.1.1
 
 - Unified version with the rest of the gisila ecosystem (`gisila`, `gisila_doc`, `gisila_studio`).

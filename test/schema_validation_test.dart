@@ -300,6 +300,68 @@ User:
       );
     });
 
+    test('accepts type: foreign_key with references', () {
+      const yaml = '''
+User:
+  columns:
+    email:
+      type: varchar
+
+Post:
+  columns:
+    author:
+      type: foreign_key
+      references: User
+      is_null: false
+''';
+      final schema = SchemaDefinition.fromYaml(yaml);
+      final fk = schema.getModel('Post')!.foreignKeyColumns.single;
+      expect(fk.type, ColumnType.foreignKey);
+      expect(fk.relationship!.references, 'User');
+      expect(fk.physicalColumnName, 'author_id');
+    });
+
+    test('requires references when type is foreign_key', () {
+      _expectError(
+        '''
+Post:
+  columns:
+    author:
+      type: foreign_key
+''',
+        code: 'missing_references',
+        messageContains: 'foreign_key',
+      );
+    });
+
+    test('accepts max_length on varchar', () {
+      const yaml = '''
+Tag:
+  columns:
+    slug:
+      type: varchar
+      max_length: 64
+''';
+      final schema = SchemaDefinition.fromYaml(yaml);
+      final col = schema.getModel('Tag')!.columns.firstWhere((c) => c.name == 'slug');
+      expect(col.constraints.maxLength, 64);
+      expect(col.postgresType, 'VARCHAR(64)');
+    });
+
+    test('rejects max_length on non-varchar types', () {
+      _expectError(
+        '''
+User:
+  columns:
+    age:
+      type: integer
+      max_length: 10
+''',
+        code: 'invalid_max_length',
+        messageContains: 'varchar',
+      );
+    });
+
     test('rejects invalid on_delete action with suggestion', () {
       final ex = _expectErrors('''
 Author:

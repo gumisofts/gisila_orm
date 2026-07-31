@@ -4,16 +4,22 @@ export 'postgresql_exceptions.dart';
 class DefaultValueException implements Exception {
   String msg;
   DefaultValueException({required this.msg});
+  @override
+  String toString() => msg;
 }
 
 class QueryException implements Exception {
   String msg;
   QueryException({required this.msg});
+  @override
+  String toString() => msg;
 }
 
 class ValidationException implements Exception {
   List<String> errors;
   ValidationException({required this.errors});
+  @override
+  String toString() => errors.join('\n');
 }
 
 /// Thrown when [DatabaseConfig] or [Database.connect] cannot resolve a
