@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Migrations: replace the line-comment stripper added in 0.1.2 with a scanner that tracks string literals, quoted identifiers, dollar quotes, and comments, so only top-level semicolons end a statement. 0.1.2 stripped everything after the first `--` on a line even inside a string, corrupting values such as `'cargo build --release'` and leaving an unterminated literal. Anyone on 0.1.2 should upgrade.
+- Migrations: dollar-quoted function bodies and block comments (including nested ones) now survive splitting intact.
+
 ## 0.1.2
 
 - Migrations: strip `--` line comments before splitting a script into statements. Previously a semicolon inside a comment truncated the comment and fed its remainder to PostgreSQL as a statement, failing the migration with a syntax error.

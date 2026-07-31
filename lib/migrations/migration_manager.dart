@@ -239,27 +239,152 @@ class MigrationManager {
 
 /// Split a multi-statement SQL script into executable statements.
 ///
-/// Line comments (`-- …`) are stripped first so a semicolon inside a
-/// comment cannot produce a bogus fragment like `rename to …`. Nested
-/// `BEGIN`/`COMMIT` wrappers are skipped because [MigrationManager]
-/// already runs each migration inside its own transaction.
+/// Scans the script one character at a time, tracking whether it is inside a
+/// string literal, a quoted identifier, or a comment, so that only top-level
+/// semicolons terminate a statement. Both forms of naive splitting get this
+/// wrong: splitting on every `;` breaks on a semicolon inside a comment or a
+/// literal, while stripping everything after the first `--` on a line mangles
+/// values such as `'cargo build --release'`.
+///
+/// Comments are dropped from the output. Bare `BEGIN` / `COMMIT` wrappers are
+/// skipped because [MigrationManager] already runs each migration inside its
+/// own transaction.
 List<String> splitSqlStatements(String sql) {
-  final withoutLineComments = sql
-      .split('\n')
-      .map((line) {
-        final idx = line.indexOf('--');
-        if (idx < 0) return line;
-        return line.substring(0, idx);
-      })
-      .join('\n');
+  final statements = <String>[];
+  final buffer = StringBuffer();
 
-  return withoutLineComments
-      .split(';')
-      .map((s) => s.trim())
-      .where((s) => s.isNotEmpty)
-      .where((s) {
-        final upper = s.toUpperCase();
-        return upper != 'BEGIN' && upper != 'COMMIT';
-      })
-      .toList();
+  void flush() {
+    final statement = buffer.toString().trim();
+    buffer.clear();
+    if (statement.isEmpty) return;
+    final upper = statement.toUpperCase();
+    if (upper == 'BEGIN' || upper == 'COMMIT') return;
+    statements.add(statement);
+  }
+
+  var i = 0;
+  while (i < sql.length) {
+    final char = sql[i];
+
+    if (char == '-' && i + 1 < sql.length && sql[i + 1] == '-') {
+      final newline = sql.indexOf('\n', i);
+      i = newline < 0 ? sql.length : newline;
+      buffer.write(' ');
+      continue;
+    }
+
+    if (char == '/' && i + 1 < sql.length && sql[i + 1] == '*') {
+      // Block comments nest in PostgreSQL, unlike in the SQL standard.
+      var depth = 1;
+      i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql[i] == '/' && i + 1 < sql.length && sql[i + 1] == '*') {
+          depth++;
+          i += 2;
+        } else if (sql[i] == '*' && i + 1 < sql.length && sql[i + 1] == '/') {
+          depth--;
+          i += 2;
+        } else {
+          i++;
+        }
+      }
+      buffer.write(' ');
+      continue;
+    }
+
+    if (char == r'$') {
+      final tag = _dollarQuoteTag(sql, i);
+      if (tag != null) {
+        final close = sql.indexOf(tag, i + tag.length);
+        final end = close < 0 ? sql.length : close + tag.length;
+        buffer.write(sql.substring(i, end));
+        i = end;
+        continue;
+      }
+    }
+
+    if (char == "'") {
+      // In an E'…' string a backslash escapes the next character, so a
+      // trailing \' does not close the literal.
+      final isEscapeString = i > 0 &&
+          (sql[i - 1] == 'e' || sql[i - 1] == 'E') &&
+          (i == 1 || !_isIdentifierChar(sql[i - 2]));
+      buffer.write(char);
+      i++;
+      while (i < sql.length) {
+        final inner = sql[i];
+        if (isEscapeString && inner == r'\' && i + 1 < sql.length) {
+          buffer.write(sql.substring(i, i + 2));
+          i += 2;
+          continue;
+        }
+        if (inner == "'") {
+          if (i + 1 < sql.length && sql[i + 1] == "'") {
+            buffer.write("''");
+            i += 2;
+            continue;
+          }
+          buffer.write(inner);
+          i++;
+          break;
+        }
+        buffer.write(inner);
+        i++;
+      }
+      continue;
+    }
+
+    if (char == '"') {
+      buffer.write(char);
+      i++;
+      while (i < sql.length) {
+        final inner = sql[i];
+        if (inner == '"') {
+          if (i + 1 < sql.length && sql[i + 1] == '"') {
+            buffer.write('""');
+            i += 2;
+            continue;
+          }
+          buffer.write(inner);
+          i++;
+          break;
+        }
+        buffer.write(inner);
+        i++;
+      }
+      continue;
+    }
+
+    if (char == ';') {
+      flush();
+      i++;
+      continue;
+    }
+
+    buffer.write(char);
+    i++;
+  }
+
+  flush();
+  return statements;
+}
+
+/// Return the dollar-quote delimiter starting at [start] (`$$` or `$tag$`), or
+/// null when the `$` begins something else — most often a `$1` placeholder.
+String? _dollarQuoteTag(String sql, int start) {
+  var i = start + 1;
+  while (i < sql.length && sql[i] != r'$') {
+    if (!_isIdentifierChar(sql[i])) return null;
+    i++;
+  }
+  if (i >= sql.length) return null;
+  return sql.substring(start, i + 1);
+}
+
+bool _isIdentifierChar(String char) {
+  final code = char.codeUnitAt(0);
+  return (code >= 0x30 && code <= 0x39) || // 0-9
+      (code >= 0x41 && code <= 0x5A) || // A-Z
+      (code >= 0x61 && code <= 0x7A) || // a-z
+      char == '_';
 }
