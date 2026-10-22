@@ -283,11 +283,11 @@ While iterating on a **single-file** schema you can also use
 
 ## 8. Apply your first migration
 
-The generator already produced `blog.gisila.up.sql`. The `gisila:migrate`
+The generator already produced `blog.gisila.up.sql`. The `gisila_orm:migrate`
 CLI applies it.
 
 ```bash
-dart run gisila:migrate up --dir lib/models --config database.yaml
+dart run gisila_orm:migrate up --dir lib/models --config database.yaml
 ```
 
 Expected output:
@@ -299,7 +299,7 @@ Applied 1 migration(s) in batch 1:
 
 What just happened:
 
-1. `gisila:migrate` connected using `database.yaml`.
+1. `gisila_orm:migrate` connected using `database.yaml`.
 2. It created the bookkeeping table `gisila_migrations` if missing.
 3. It scanned `lib/models/` for `*.up.sql` files with paired `*.down.sql`,
    compared their IDs against `gisila_migrations`, and ran every pending
@@ -310,7 +310,7 @@ What just happened:
 Sanity check:
 
 ```bash
-dart run gisila:migrate status --dir lib/models --config database.yaml
+dart run gisila_orm:migrate status --dir lib/models --config database.yaml
 # Discovered: 1, applied: 1
 #   [x] lib/models/blog.gisila
 ```
@@ -572,7 +572,7 @@ Post:
 Re-run the generator:
 
 ```bash
-dart run gisila:generate
+dart run gisila_orm:generate
 ```
 
 The `*.g.dart` updates immediately. **But `blog.gisila.up.sql` regenerates
@@ -607,13 +607,13 @@ COMMIT;
 Apply:
 
 ```bash
-dart run gisila:migrate up --dir lib/models/migrations --config database.yaml
+dart run gisila_orm:migrate up --dir lib/models/migrations --config database.yaml
 ```
 
 Roll back the most recent batch:
 
 ```bash
-dart run gisila:migrate down --dir lib/models/migrations --steps 1
+dart run gisila_orm:migrate down --dir lib/models/migrations --steps 1
 ```
 
 ### Option B — diff two schema definitions programmatically

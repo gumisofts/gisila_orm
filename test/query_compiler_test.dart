@@ -187,4 +187,42 @@ void main() {
       expect(c.params, [1]);
     });
   });
+
+  group('identifier quoting', () {
+    const evil = 'id" , (SELECT pw FROM admins) AS "x';
+
+    test('safeTk escapes inner double quotes', () {
+      expect('a"b'.safeTk, '"a""b"');
+      expect(evil.safeTk, '"id"" , (SELECT pw FROM admins) AS ""x"');
+    });
+
+    test('safeTk stays idempotent for well-formed quoted identifiers', () {
+      expect('"users"'.safeTk, '"users"');
+      expect('"a""b"'.safeTk, '"a""b"');
+      expect('users'.safeTk.safeTk, '"users"');
+    });
+
+    test('safeTk re-escapes text that only looks quoted', () {
+      expect('"a" , (SELECT 1) , "b"'.safeTk,
+          '"""a"" , (SELECT 1) , ""b"""');
+    });
+
+    test('select() projection cannot inject a subquery', () {
+      final c = Query(users()).select([evil]).compile();
+      expect(c.sql,
+          'SELECT "users"."id"" , (SELECT pw FROM admins) AS ""x" FROM "users"');
+    });
+
+    test('insert/update map keys cannot inject', () {
+      final ins = Query(users()).insert({'x") values (1); --': 1}).compile();
+      expect(ins.sql, startsWith('INSERT INTO "users" ("x"") values (1); --")'));
+      final upd = Query(users()).update({'a" = 1, "b': 2}).compile();
+      expect(upd.sql, startsWith('UPDATE "users" SET "a"" = 1, ""b" = \$1'));
+    });
+
+    test('safe literal only passes through well-formed literals', () {
+      expect("'ok'".safe, "'ok'");
+      expect("'a' OR '1'='1'".safe, "'''a'' OR ''1''=''1'''");
+    });
+  });
 }

@@ -211,7 +211,7 @@ connections:
 ### 4. Run the migration
 
 ```bash
-dart run gisila:migrate up --dir lib/models --config database.yaml
+dart run gisila_orm:migrate up --dir lib/models --config database.yaml
 ```
 
 ### 5. Use the ORM

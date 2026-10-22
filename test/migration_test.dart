@@ -116,4 +116,67 @@ void main() {
       await tmp.delete(recursive: true);
     }
   });
+
+  group('baseline discovery', () {
+    late Directory tmp;
+    setUp(() async {
+      tmp = await Directory.systemTemp.createTemp('gisila_mig_base_');
+      await File('${tmp.path}/schema.gisila.up.sql').writeAsString(_upSql);
+      await File('${tmp.path}/schema.gisila.down.sql').writeAsString(_downSql);
+    });
+    tearDown(() => tmp.delete(recursive: true));
+
+    test('uses the build_runner baseline when it is the only migration',
+        () async {
+      if (!hasDb) {
+        markTestSkipped('No Postgres reachable on localhost:5454');
+        return;
+      }
+      final ids = await withTestDb<List<String>>((db, _) async {
+        final manager = MigrationManager(db);
+        final discovered = await manager.discoverIn(tmp.path);
+        final res = await manager.up(discovered);
+        return res.applied.map((m) => m.id).toList();
+      });
+      expect(ids, ['schema.gisila']);
+    });
+
+    test('ignores the baseline once real migrations exist', () async {
+      if (!hasDb) {
+        markTestSkipped('No Postgres reachable on localhost:5454');
+        return;
+      }
+      await Directory('${tmp.path}/migrations').create();
+      await File('${tmp.path}/migrations/1000_initial_schema.up.sql')
+          .writeAsString(_upSql);
+      final ids = await withTestDb<List<String>>((db, _) async {
+        final discovered = await MigrationManager(db).discoverIn(tmp.path);
+        return discovered.map((m) => m.id).toList();
+      });
+      expect(ids, ['1000_initial_schema']);
+    });
+
+    test('0.1.4 databases adopt the initial migration without re-running it',
+        () async {
+      if (!hasDb) {
+        markTestSkipped('No Postgres reachable on localhost:5454');
+        return;
+      }
+      final out = await withTestDb<List<String>>((db, _) async {
+        final manager = MigrationManager(db);
+        // 0.1.4 applied the baseline under its own id.
+        await manager.up(await manager.discoverIn(tmp.path));
+
+        await Directory('${tmp.path}/migrations').create();
+        await File('${tmp.path}/migrations/1000_initial_schema.up.sql')
+            .writeAsString(_upSql);
+        await File('${tmp.path}/migrations/1001_add_col.up.sql').writeAsString(
+            'ALTER TABLE widgets ADD COLUMN size INT;');
+
+        final res = await manager.up(await manager.discoverIn(tmp.path));
+        return res.applied.map((m) => m.id).toList();
+      });
+      expect(out, ['1000_initial_schema', '1001_add_col']);
+    });
+  });
 }

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Security: `safeTk` now escapes inner `"` in identifiers and `safe` escapes
+  inner `'` in literals. Both pass a value through unchanged only when it is
+  already a well-formed quoted token, so column names passed to `select()`,
+  `insert()` and `update()` can no longer inject SQL.
+- Migrations: the first `generate` run in a project without hand-written
+  migrations writes `migrations/<ts>_initial_schema.up.sql` (and `.down.sql`)
+  from the snapshot schema, so `migrate up` builds a fresh database. Projects
+  with a snapshot but no migrations get it backfilled on the next run.
+- Migrations: `discoverIn` uses the `*.gisila.up.sql` baseline when a
+  directory holds no other migration (the 0.1.5 regression applied nothing).
+- Migrations: databases that applied the baseline under 0.1.4
+  (`schema.gisila`) record `<ts>_initial_schema` as applied without
+  re-running it.
+- Docs: CLI examples use `dart run gisila_orm:migrate` / `gisila_orm:generate`.
+
 ## 0.1.5
 
 - Migrations: `discoverIn` skips `*.gisila.up.sql` / `*.gisila.down.sql`

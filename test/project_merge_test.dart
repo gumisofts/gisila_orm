@@ -299,7 +299,7 @@ Post:
       final first = await generateProjectSchema(tmp);
       expect(
         await generateProjectIncrementalMigration(tmp, schema: first.schema),
-        isNull,
+        initialMigrationName,
       );
 
       final snapshot = File(p.join(tmp.path, projectSnapshotRelativePath));
@@ -328,13 +328,71 @@ User:
       expect(migrationName, 'auto_project_changes');
 
       final migDir = Directory(p.join(tmp.path, 'lib', 'models', 'migrations'));
-      final migFiles = await migDir
-          .list()
-          .where((e) => e.path.endsWith('.up.sql'))
-          .toList();
-      expect(migFiles, hasLength(1));
-      final up = await File(migFiles.first.path).readAsString();
+      final migFiles = (await migDir
+              .list()
+              .where((e) => e.path.endsWith('.up.sql'))
+              .map((e) => e.path)
+              .toList())
+        ..sort();
+      expect(migFiles, hasLength(2));
+      expect(p.basename(migFiles.first), endsWith('_initial_schema.up.sql'));
+      final initial = await File(migFiles.first).readAsString();
+      expect(initial, contains('CREATE TABLE "users"'));
+      expect(initial, isNot(contains('bio')),
+          reason: 'initial migration reflects the snapshot, not the change');
+      final up = await File(migFiles.last).readAsString();
       expect(up, contains('bio'));
+    });
+
+    test('skips the initial migration when the project has its own', () async {
+      await _write(
+        tmp,
+        'lib/models/user.gisila.yaml',
+        '''
+User:
+  columns:
+    email:
+      type: varchar
+''',
+      );
+      await _write(tmp, 'lib/migrations/0001_init.up.sql', 'SELECT 1;');
+
+      final first = await generateProjectSchema(tmp);
+      expect(
+        await generateProjectIncrementalMigration(tmp, schema: first.schema),
+        isNull,
+      );
+      expect(
+        await Directory(p.join(tmp.path, 'lib', 'models', 'migrations'))
+            .exists(),
+        isFalse,
+      );
+    });
+
+    test('backfills the initial migration for an existing snapshot', () async {
+      await _write(
+        tmp,
+        'lib/models/user.gisila.yaml',
+        '''
+User:
+  columns:
+    email:
+      type: varchar
+''',
+      );
+      final first = await generateProjectSchema(tmp);
+      // A 0.1.5 project: snapshot exists but no migration was ever written.
+      await _write(tmp, projectSnapshotRelativePath, emitSchemaYaml(first.schema));
+
+      expect(
+        await generateProjectIncrementalMigration(tmp, schema: first.schema),
+        initialMigrationName,
+      );
+      expect(
+        await generateProjectIncrementalMigration(tmp, schema: first.schema),
+        isNull,
+        reason: 'written once',
+      );
     });
 
     test('emitSchemaYaml round-trips for SchemaDiffer', () async {

@@ -114,23 +114,24 @@ class MigrationManager {
   ///
   /// Skips build_runner artifacts (`*.gisila.up.sql` / `*.gisila.down.sql`)
   /// so a recursive scan of `lib/models` does not apply the generated baseline
-  /// out of order relative to `migrations/<timestamp>_*.up.sql`.
+  /// out of order relative to `migrations/<timestamp>_*.up.sql`. When the
+  /// directory holds no other migration, the baseline is the whole schema,
+  /// so it is used instead (projects that never ran `generate`).
   Future<List<Migration>> discoverIn(String directory) async {
     final dir = Directory(directory);
     if (!await dir.exists()) {
       throw FileSystemException('Migrations directory not found', directory);
     }
     final entries = await dir.list(recursive: true).toList();
-    final files = entries.whereType<File>().where((f) {
+    final upFiles = entries.whereType<File>().where((f) {
       final name = f.uri.pathSegments.isEmpty
           ? f.path
           : f.uri.pathSegments.last;
-      if (name.endsWith('.gisila.up.sql') ||
-          name.endsWith('.gisila.down.sql')) {
-        return false;
-      }
       return name.endsWith('.up.sql');
     }).toList();
+    bool isBaseline(File f) => f.path.endsWith('.gisila.up.sql');
+    final own = upFiles.where((f) => !isBaseline(f)).toList();
+    final files = own.isNotEmpty ? own : upFiles;
 
     final result = <Migration>[];
     for (final up in files) {
@@ -168,11 +169,20 @@ class MigrationManager {
         ? 1
         : (applied.map((m) => m.batch).reduce((a, b) => a > b ? a : b) + 1);
 
+    // Databases migrated by 0.1.4 recorded the build_runner baseline
+    // (`schema.gisila`) instead of a `<ts>_initial_schema` migration. The
+    // tables already exist there, so only record the initial migration.
+    final hasLegacyBaseline = appliedIds.any((id) => id.endsWith('.gisila'));
+
     final ranThis = <Migration>[];
     for (final migration in pending) {
+      final adoptOnly =
+          hasLegacyBaseline && migration.id.endsWith('_initial_schema');
       await _db.transaction((tx) async {
-        for (final sql in splitSqlStatements(migration.upSql)) {
-          await tx.execute(sql);
+        if (!adoptOnly) {
+          for (final sql in splitSqlStatements(migration.upSql)) {
+            await tx.execute(sql);
+          }
         }
 
         await tx.execute(
