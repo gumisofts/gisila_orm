@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Fix: `count()` ignores ORDER BY, LIMIT and OFFSET, so it counts every
+  matching row (Postgres used to reject the ORDER BY, and an OFFSET past
+  the first row threw). With DISTINCT or GROUP BY it counts distinct rows or
+  groups through a subquery.
+- Fix: `one()` and `first()` no longer change the query they are called on
+  (they used to leave `LIMIT 2` / `LIMIT 1` behind for the next call).
+- Fix: `eq(null)` / `neq(null)` compile to `IS NULL` / `IS NOT NULL`;
+  `= NULL` never matched anything.
 - Security: `safeTk` now escapes inner `"` in identifiers and `safe` escapes
   inner `'` in literals. Both pass a value through unchanged only when it is
   already a well-formed quoted token, so column names passed to `select()`,

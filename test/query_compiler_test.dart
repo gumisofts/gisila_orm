@@ -7,7 +7,11 @@
 library gisila.test.query_compiler_test;
 
 import 'package:gisila_orm/gisila.dart';
+import 'package:postgres/postgres.dart'
+    show Result, ResultRow, ResultSchema, ResultSchemaColumn, Type;
 import 'package:test/test.dart';
+
+import 'support/test_db.dart';
 
 void main() {
   // Lightweight TableMeta. We don't hydrate rows in this test, so
@@ -223,6 +227,86 @@ void main() {
     test('safe literal only passes through well-formed literals', () {
       expect("'ok'".safe, "'ok'");
       expect("'a' OR '1'='1'".safe, "'''a'' OR ''1''=''1'''");
+    });
+  });
+
+  group('terminal operations', () {
+    /// A mock that answers every statement with one `count` row of [n].
+    MockDbContext counting(int n) {
+      final schema = ResultSchema([
+        ResultSchemaColumn(
+            typeOid: 20, type: Type.bigInteger, columnName: 'count'),
+      ]);
+      return MockDbContext(
+        onExecute: (_, __) => Result(
+          rows: [
+            ResultRow(values: [n], schema: schema)
+          ],
+          affectedRows: 1,
+          schema: schema,
+        ),
+      );
+    }
+
+    test('count() ignores ORDER BY, LIMIT and OFFSET (ORM-07)', () async {
+      final db = counting(42);
+      final q = Query(users())
+          .where(isActive.eq(true))
+          .orderBy(createdAt, desc: true)
+          .limit(10)
+          .offset(20);
+      expect(await q.count(db), 42);
+      expect(
+        db.sqls.single,
+        'SELECT COUNT(*)::bigint AS "count" FROM "users" '
+        'WHERE ("users"."is_active" = \$1)',
+      );
+      expect(db.params.single, [true]);
+      // The page itself still has them.
+      expect(q.compile().sql, endsWith('LIMIT 10 OFFSET 20'));
+    });
+
+    test('count() with DISTINCT or GROUP BY counts rows of a subquery',
+        () async {
+      final db = counting(3);
+      await Query(users()).select(['age']).distinct().orderBy(age).count(db);
+      await Query(users()).groupBy(age).count(db);
+      expect(
+        db.sqls[0],
+        'SELECT COUNT(*)::bigint AS "count" FROM '
+        '(SELECT DISTINCT "users"."age" FROM "users") AS "_counted"',
+      );
+      expect(
+        db.sqls[1],
+        'SELECT COUNT(*)::bigint AS "count" FROM '
+        '(SELECT 1 FROM "users" GROUP BY "users"."age") AS "_counted"',
+      );
+    });
+
+    test('one() and first() leave the builder unchanged (ORM-08)', () async {
+      final db = MockDbContext();
+      final q = Query(users()).where(isActive.eq(true));
+      await q.first(db);
+      await expectLater(q.one(db), throwsA(isA<QueryNoRowsException>()));
+      expect(db.sqls[0], endsWith('LIMIT 1'));
+      expect(db.sqls[1], endsWith('LIMIT 2'));
+      expect(q.compile().sql, isNot(contains('LIMIT')));
+      final paged = Query(users()).limit(50);
+      await paged.first(db);
+      expect(paged.compile().sql, endsWith('LIMIT 50'));
+    });
+
+    test('eq(null) / neq(null) compile to IS [NOT] NULL (ORM-09)', () {
+      const deletedAt =
+          ColumnRef<DateTime?>(table: 'users', column: 'deleted_at');
+      final isNull = Query(users()).where(deletedAt.eq(null)).compile();
+      expect(isNull.sql, endsWith('WHERE ("users"."deleted_at" IS NULL)'));
+      expect(isNull.params, isEmpty);
+      final notNull = Query(users()).where(deletedAt.neq(null)).compile();
+      expect(notNull.sql, endsWith('WHERE ("users"."deleted_at" IS NOT NULL)'));
+      final value =
+          Query(users()).where(deletedAt.eq(DateTime.utc(2026))).compile();
+      expect(value.sql, endsWith('WHERE ("users"."deleted_at" = \$1)'));
     });
   });
 }

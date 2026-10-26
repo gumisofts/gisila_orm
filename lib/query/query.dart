@@ -149,8 +149,26 @@ class Query<T> {
 
   // SQL emission ---------------------------------------------------------
 
+  /// A copy with the same clauses, so terminal operations can adjust it
+  /// (a `LIMIT` for [one]/[first]) without changing this builder.
+  Query<T> _copy() => Query<T>(_meta)
+    .._where = _where
+    .._orderBy.addAll(_orderBy)
+    .._joins.addAll(_joins)
+    .._groupBy.addAll(_groupBy)
+    .._having = _having
+    .._distinct = _distinct
+    .._limit = _limit
+    .._offset = _offset
+    .._projection = _projection
+    .._preloads.addAll(_preloads);
+
   /// Compile this query into final SQL + parameters.
-  CompiledSql compile({String? overrideSelect}) {
+  CompiledSql compile({String? overrideSelect}) =>
+      _compile(overrideSelect: overrideSelect);
+
+  /// [unpaged] leaves out ORDER BY, LIMIT and OFFSET, for [count].
+  CompiledSql _compile({String? overrideSelect, bool unpaged = false}) {
     final c = SqlCompiler();
     final buf = StringBuffer('SELECT ');
     if (_distinct) buf.write('DISTINCT ');
@@ -186,7 +204,7 @@ class Query<T> {
       buf.write(' HAVING ${c.compile(_having!)}');
     }
 
-    if (_orderBy.isNotEmpty) {
+    if (_orderBy.isNotEmpty && !unpaged) {
       buf.write(' ORDER BY ');
       buf.write(_orderBy.map((t) {
         final dir = t.order == SortOrder.asc ? 'ASC' : 'DESC';
@@ -195,8 +213,8 @@ class Query<T> {
       }).join(', '));
     }
 
-    if (_limit != null) buf.write(' LIMIT ${_limit!}');
-    if (_offset != null) buf.write(' OFFSET ${_offset!}');
+    if (_limit != null && !unpaged) buf.write(' LIMIT ${_limit!}');
+    if (_offset != null && !unpaged) buf.write(' OFFSET ${_offset!}');
 
     return CompiledSql(buf.toString(), c.params);
   }
@@ -221,7 +239,7 @@ class Query<T> {
   /// Return exactly one row. Throws [QueryNoRowsException] or
   /// [QueryMultipleRowsException] if zero or more than one row matches.
   Future<T> one(DbContext db) async {
-    final rows = await limit(2).all(db);
+    final rows = await (_copy().._limit = 2).all(db);
     if (rows.isEmpty) {
       throw QueryNoRowsException('Query<$T>.one() found no rows');
     }
@@ -233,13 +251,28 @@ class Query<T> {
 
   /// Return the first row matching, or null.
   Future<T?> first(DbContext db) async {
-    final rows = await limit(1).all(db);
+    final rows = await (_copy().._limit = 1).all(db);
     return rows.isEmpty ? null : rows.first;
   }
 
-  /// `SELECT COUNT(*)` honoring the current WHERE/JOINs.
+  /// `SELECT COUNT(*)` honoring the current WHERE/JOINs. ORDER BY, LIMIT
+  /// and OFFSET are ignored: this counts every matching row, which is what
+  /// pagination needs. With DISTINCT or GROUP BY it counts the distinct
+  /// rows / groups.
   Future<int> count(DbContext db) async {
-    final compiled = compile(overrideSelect: 'COUNT(*)::bigint AS "count"');
+    const select = 'COUNT(*)::bigint AS "count"';
+    final CompiledSql compiled;
+    if (_distinct || _groupBy.isNotEmpty) {
+      // One row per group is all a grouped count needs, and selecting
+      // the table's columns would not be valid next to GROUP BY.
+      final inner = _compile(
+          overrideSelect: _groupBy.isNotEmpty && !_distinct ? '1' : null,
+          unpaged: true);
+      compiled = CompiledSql(
+          'SELECT $select FROM (${inner.sql}) AS "_counted"', inner.params);
+    } else {
+      compiled = _compile(overrideSelect: select, unpaged: true);
+    }
     final result = await db.execute(compiled.sql, parameters: compiled.params);
     final row = result.first.toColumnMap();
     return (row['count'] as num).toInt();
