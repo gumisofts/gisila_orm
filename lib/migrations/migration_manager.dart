@@ -237,9 +237,8 @@ class MigrationManager {
     }
     final entries = await dir.list(recursive: true).toList();
     final upFiles = entries.whereType<File>().where((f) {
-      final name = f.uri.pathSegments.isEmpty
-          ? f.path
-          : f.uri.pathSegments.last;
+      final name =
+          f.uri.pathSegments.isEmpty ? f.path : f.uri.pathSegments.last;
       return name.endsWith('.up.sql');
     }).toList();
     bool isBaseline(File f) => f.path.endsWith('.gisila.up.sql');

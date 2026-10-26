@@ -24,13 +24,15 @@ Post:
       type: integer[]
 ''';
       final schema = SchemaDefinition.fromYaml(yaml);
-      final tags = schema.getModel('Post')!.columns.firstWhere((c) => c.name == 'tags');
+      final tags =
+          schema.getModel('Post')!.columns.firstWhere((c) => c.name == 'tags');
       expect(tags.type, ColumnType.array);
       expect(tags.array!.elementType, ColumnType.varchar);
       expect(tags.postgresType, 'VARCHAR(255)[]');
 
       final up = emitUpSql(schema);
-      expect(up, contains('"tags" VARCHAR(255)[] NOT NULL DEFAULT \'{}\'::varchar[]'));
+      expect(up,
+          contains('"tags" VARCHAR(255)[] NOT NULL DEFAULT \'{}\'::varchar[]'));
       expect(up, contains('"scores" INTEGER[]'));
 
       final dart = emitDart(schema);
@@ -87,7 +89,9 @@ TeamMember:
       expect(schema.enums.single.name, 'TeamRole');
       expect(schema.enums.single.values, ['viewer', 'developer', 'admin']);
 
-      final role = schema.getModel('TeamMember')!.columns
+      final role = schema
+          .getModel('TeamMember')!
+          .columns
           .firstWhere((c) => c.name == 'role');
       expect(role.type, ColumnType.enumType);
       expect(role.postgresType, '"team_role"');
@@ -99,7 +103,10 @@ TeamMember:
           "CREATE TYPE \"team_role\" AS ENUM ('viewer', 'developer', 'admin');",
         ),
       );
-      expect(up, contains('"role" "team_role" NOT NULL DEFAULT \'developer\'::team_role'));
+      expect(
+          up,
+          contains(
+              '"role" "team_role" NOT NULL DEFAULT \'developer\'::team_role'));
 
       final down = emitDownSql(schema);
       expect(down, contains('DROP TYPE IF EXISTS "team_role";'));

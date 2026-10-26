@@ -87,8 +87,8 @@ void main() {
         await expectLater(manager.up([edited, next]),
             throwsA(isA<MigrationChecksumException>()));
         // Nothing after the check ran.
-        expect((await manager.listApplied()).map((a) => a.id),
-            ['0001_widgets']);
+        expect(
+            (await manager.listApplied()).map((a) => a.id), ['0001_widgets']);
       });
     });
 
@@ -166,8 +166,8 @@ void main() {
         final manager = MigrationManager(db);
         await manager.up([_widgets]);
         await expectLater(manager.up([_widgets, plain]), throwsA(anything));
-        expect((await manager.listApplied()).map((a) => a.id),
-            ['0001_widgets']);
+        expect(
+            (await manager.listApplied()).map((a) => a.id), ['0001_widgets']);
       });
     });
   });

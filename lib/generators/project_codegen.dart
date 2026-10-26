@@ -62,10 +62,9 @@ Future<List<File>> discoverSchemaFiles(Directory root) async {
     }
   }
 
-  files.sort((a, b) =>
-      p.relative(a.path, from: rootPath).compareTo(
-            p.relative(b.path, from: rootPath),
-          ));
+  files.sort((a, b) => p.relative(a.path, from: rootPath).compareTo(
+        p.relative(b.path, from: rootPath),
+      ));
   return files;
 }
 
@@ -138,8 +137,7 @@ Future<String?> generateProjectIncrementalMigration(
   await snapshotFile.parent.create(recursive: true);
 
   final yaml = emitSchemaYaml(current);
-  final outDir = migrationsDir ??
-      await _resolveMigrationsDir(root, files);
+  final outDir = migrationsDir ?? await _resolveMigrationsDir(root, files);
 
   final hadSnapshot = await snapshotFile.exists();
   final oldSchema = hadSnapshot

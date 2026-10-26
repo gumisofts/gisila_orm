@@ -428,8 +428,7 @@ class SchemaDiffer {
           columnName: col.name,
         );
         changes.add(change);
-        operations
-            .add(_generateAddForeignKeyOperation(newModel, col, change));
+        operations.add(_generateAddForeignKeyOperation(newModel, col, change));
       }
     }
 
@@ -632,7 +631,8 @@ class SchemaDiffer {
           newName: rename.newName,
         );
         changes.add(change);
-        operations.add(_generateRenameColumnOperation(newModel, rename, change));
+        operations
+            .add(_generateRenameColumnOperation(newModel, rename, change));
       }
 
       final oldIsFk = oldCol.type == ColumnType.foreignKey;
@@ -655,7 +655,9 @@ class SchemaDiffer {
         changes.add(fkChange);
         operations
             .add(_generateDropForeignKeyOperation(newModel, oldCol, fkChange));
-      } else if (oldIsFk && newIsFk && _foreignKeyConstraintChanged(oldCol, newCol)) {
+      } else if (oldIsFk &&
+          newIsFk &&
+          _foreignKeyConstraintChanged(oldCol, newCol)) {
         // Recreate the constraint when the target / referential actions
         // change. Physical type changes are handled below.
         final dropChange = SchemaChange(
@@ -664,8 +666,8 @@ class SchemaDiffer {
           columnName: oldCol.name,
         );
         changes.add(dropChange);
-        operations
-            .add(_generateDropForeignKeyOperation(newModel, oldCol, dropChange));
+        operations.add(
+            _generateDropForeignKeyOperation(newModel, oldCol, dropChange));
         final addChange = SchemaChange(
           type: ChangeType.addForeignKey,
           tableName: newModel.tableName,

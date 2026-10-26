@@ -78,8 +78,8 @@ void main() {
     test('sslrootcert is kept; "system" means the default store', () {
       expect(_url('postgres://u:p@db/m?sslrootcert=/etc/ca.pem').sslRootCert,
           '/etc/ca.pem');
-      expect(_url('postgres://u:p@db/m?sslrootcert=system').sslRootCert,
-          isNull);
+      expect(
+          _url('postgres://u:p@db/m?sslrootcert=system').sslRootCert, isNull);
     });
 
     test('YAML ssl_mode and ssl_root_cert', () {
@@ -119,8 +119,7 @@ void main() {
       }
     }
 
-    test('prefer falls back to plain TCP when the server has no TLS',
-        () async {
+    test('prefer falls back to plain TCP when the server has no TLS', () async {
       if (!hasDb) return markTestSkipped('No Postgres on localhost:5454');
       expect(
           await query('postgres://postgres:postgres@localhost:5454/postgres'

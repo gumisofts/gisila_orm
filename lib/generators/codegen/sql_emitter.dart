@@ -65,8 +65,7 @@ String emitUpSql(SchemaDefinition schema) {
   for (final e in schema.enums) {
     final values = e.values.map((v) => "'$v'").join(', ');
     buf
-      ..writeln(
-          'CREATE TYPE "${e.postgresTypeName}" AS ENUM ($values);')
+      ..writeln('CREATE TYPE "${e.postgresTypeName}" AS ENUM ($values);')
       ..writeln();
   }
 

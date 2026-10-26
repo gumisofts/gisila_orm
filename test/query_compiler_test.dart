@@ -203,8 +203,7 @@ void main() {
     });
 
     test('safeTk re-escapes text that only looks quoted', () {
-      expect('"a" , (SELECT 1) , "b"'.safeTk,
-          '"""a"" , (SELECT 1) , ""b"""');
+      expect('"a" , (SELECT 1) , "b"'.safeTk, '"""a"" , (SELECT 1) , ""b"""');
     });
 
     test('select() projection cannot inject a subquery', () {
@@ -215,7 +214,8 @@ void main() {
 
     test('insert/update map keys cannot inject', () {
       final ins = Query(users()).insert({'x") values (1); --': 1}).compile();
-      expect(ins.sql, startsWith('INSERT INTO "users" ("x"") values (1); --")'));
+      expect(
+          ins.sql, startsWith('INSERT INTO "users" ("x"") values (1); --")'));
       final upd = Query(users()).update({'a" = 1, "b': 2}).compile();
       expect(upd.sql, startsWith('UPDATE "users" SET "a"" = 1, ""b" = \$1'));
     });

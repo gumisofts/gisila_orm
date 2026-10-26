@@ -93,8 +93,7 @@ class DatabaseConnection {
 
   /// The TLS mode actually used.
   DatabaseSslMode get effectiveSslMode =>
-      sslMode ??
-      (useSSL ? DatabaseSslMode.require : DatabaseSslMode.disable);
+      sslMode ?? (useSSL ? DatabaseSslMode.require : DatabaseSslMode.disable);
 
   /// Connection establishment timeout in seconds.
   final int connectionTimeout;

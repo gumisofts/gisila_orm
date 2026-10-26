@@ -329,10 +329,10 @@ User:
 
       final migDir = Directory(p.join(tmp.path, 'lib', 'models', 'migrations'));
       final migFiles = (await migDir
-              .list()
-              .where((e) => e.path.endsWith('.up.sql'))
-              .map((e) => e.path)
-              .toList())
+          .list()
+          .where((e) => e.path.endsWith('.up.sql'))
+          .map((e) => e.path)
+          .toList())
         ..sort();
       expect(migFiles, hasLength(2));
       expect(p.basename(migFiles.first), endsWith('_initial_schema.up.sql'));
@@ -382,7 +382,8 @@ User:
       );
       final first = await generateProjectSchema(tmp);
       // A 0.1.5 project: snapshot exists but no migration was ever written.
-      await _write(tmp, projectSnapshotRelativePath, emitSchemaYaml(first.schema));
+      await _write(
+          tmp, projectSnapshotRelativePath, emitSchemaYaml(first.schema));
 
       expect(
         await generateProjectIncrementalMigration(tmp, schema: first.schema),

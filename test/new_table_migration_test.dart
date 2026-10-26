@@ -65,9 +65,9 @@ void main() {
   test('FKs and junctions come after every CREATE TABLE', () {
     final ops = _diff().operations;
     int indexOf(bool Function(MigrationOperation) f) => ops.indexWhere(f);
-    final lastCreate = ops.lastIndexWhere(
-        (o) => o.change.type == ChangeType.createTable &&
-            o.change.tableName != 'posts_tags');
+    final lastCreate = ops.lastIndexWhere((o) =>
+        o.change.type == ChangeType.createTable &&
+        o.change.tableName != 'posts_tags');
     expect(indexOf((o) => o.change.type == ChangeType.addForeignKey),
         greaterThan(lastCreate));
     expect(indexOf((o) => o.change.tableName == 'posts_tags'),
@@ -116,12 +116,11 @@ void main() {
       return shape(db);
     });
 
-    final migrated = await withTestDb<(Set<String>, Set<String>)>(
-        (db, _) async {
+    final migrated =
+        await withTestDb<(Set<String>, Set<String>)>((db, _) async {
       final manager = MigrationManager(db);
       final base = Migration(
-          id: '1_base',
-          upSql: emitUpSql(SchemaDefinition.fromYaml(_before)));
+          id: '1_base', upSql: emitUpSql(SchemaDefinition.fromYaml(_before)));
       final change = Migration(
         id: '2_posts',
         upSql: ops.map((o) => o.upSql).join('\n'),

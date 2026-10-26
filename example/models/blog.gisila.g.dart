@@ -33,18 +33,18 @@ class Author with Preloadable {
   });
 
   factory Author.fromRow(Map<String, dynamic> row) => Author(
-    id: row['id'] as int?,
-    firstName: row['first_name'] as String,
-    lastName: row['last_name'] as String?,
-    email: row['email'] as String,
-  );
+        id: row['id'] as int?,
+        firstName: row['first_name'] as String,
+        lastName: row['last_name'] as String?,
+        email: row['email'] as String,
+      );
 
   Map<String, dynamic> toRow() => {
-    'id': id,
-    'first_name': firstName,
-    'last_name': lastName,
-    'email': email,
-  };
+        'id': id,
+        'first_name': firstName,
+        'last_name': lastName,
+        'email': email,
+      };
 
   factory Author.fromJson(Map<String, dynamic> json) => Author.fromRow(json);
 
@@ -63,12 +63,13 @@ class Author with Preloadable {
     String? firstName,
     String? lastName,
     String? email,
-  }) => Author(
-    id: id ?? this.id,
-    firstName: firstName ?? this.firstName,
-    lastName: lastName ?? this.lastName,
-    email: email ?? this.email,
-  );
+  }) =>
+      Author(
+        id: id ?? this.id,
+        firstName: firstName ?? this.firstName,
+        lastName: lastName ?? this.lastName,
+        email: email ?? this.email,
+      );
 
   /// Returns validation errors for this instance.
   ///
@@ -84,12 +85,12 @@ class Author with Preloadable {
 
   static final Relation<Author, Book> writtenBooks =
       HasManyRelation<Author, Book>(
-        parentTable: 'authors',
-        childTable: 'books',
-        name: 'writtenBooks',
-        childForeignKey: 'author_id',
-        childMeta: BookTable.metadata,
-      );
+    parentTable: 'authors',
+    childTable: 'books',
+    name: 'writtenBooks',
+    childForeignKey: 'author_id',
+    childMeta: BookTable.metadata,
+  );
 
   /// Preloaded writtenBooks; empty list when not preloaded.
   List<Book> get writtenBooksList =>
@@ -147,30 +148,30 @@ class Book with Preloadable {
   });
 
   factory Book.fromRow(Map<String, dynamic> row) => Book(
-    id: row['id'] as int?,
-    title: row['title'] as String,
-    subtitle: row['subtitle'] as String?,
-    description: row['description'] as String?,
-    publishedDate: row['published_date'] == null
-        ? null
-        : (row['published_date'] is DateTime
-              ? row['published_date'] as DateTime
-              : DateTime.parse(row['published_date'].toString())),
-    isbn: row['isbn'] as String?,
-    pageCount: row['page_count'] as int?,
-    authorId: row['author_id'] as int?,
-  );
+        id: row['id'] as int?,
+        title: row['title'] as String,
+        subtitle: row['subtitle'] as String?,
+        description: row['description'] as String?,
+        publishedDate: row['published_date'] == null
+            ? null
+            : (row['published_date'] is DateTime
+                ? row['published_date'] as DateTime
+                : DateTime.parse(row['published_date'].toString())),
+        isbn: row['isbn'] as String?,
+        pageCount: row['page_count'] as int?,
+        authorId: row['author_id'] as int?,
+      );
 
   Map<String, dynamic> toRow() => {
-    'id': id,
-    'title': title,
-    'subtitle': subtitle,
-    'description': description,
-    'published_date': publishedDate,
-    'isbn': isbn,
-    'page_count': pageCount,
-    'author_id': authorId,
-  };
+        'id': id,
+        'title': title,
+        'subtitle': subtitle,
+        'description': description,
+        'published_date': publishedDate,
+        'isbn': isbn,
+        'page_count': pageCount,
+        'author_id': authorId,
+      };
 
   factory Book.fromJson(Map<String, dynamic> json) => Book.fromRow(json);
 
@@ -193,16 +194,17 @@ class Book with Preloadable {
     String? isbn,
     int? pageCount,
     int? authorId,
-  }) => Book(
-    id: id ?? this.id,
-    title: title ?? this.title,
-    subtitle: subtitle ?? this.subtitle,
-    description: description ?? this.description,
-    publishedDate: publishedDate ?? this.publishedDate,
-    isbn: isbn ?? this.isbn,
-    pageCount: pageCount ?? this.pageCount,
-    authorId: authorId ?? this.authorId,
-  );
+  }) =>
+      Book(
+        id: id ?? this.id,
+        title: title ?? this.title,
+        subtitle: subtitle ?? this.subtitle,
+        description: description ?? this.description,
+        publishedDate: publishedDate ?? this.publishedDate,
+        isbn: isbn ?? this.isbn,
+        pageCount: pageCount ?? this.pageCount,
+        authorId: authorId ?? this.authorId,
+      );
 
   /// Returns validation errors for this instance.
   ///
@@ -317,24 +319,24 @@ class Place with Preloadable {
   Place({this.id, required this.name, required this.location, this.bounds});
 
   factory Place.fromRow(Map<String, dynamic> row) => Place(
-    id: row['id'] as int?,
-    name: row['name'] as String,
-    location: row['location'] is Point
-        ? row['location'] as Point
-        : Point.fromString(row['location'].toString()),
-    bounds: row['bounds'] == null
-        ? null
-        : (row['bounds'] is Box
-              ? row['bounds'] as Box
-              : Box.fromString(row['bounds'].toString())),
-  );
+        id: row['id'] as int?,
+        name: row['name'] as String,
+        location: row['location'] is Point
+            ? row['location'] as Point
+            : Point.fromString(row['location'].toString()),
+        bounds: row['bounds'] == null
+            ? null
+            : (row['bounds'] is Box
+                ? row['bounds'] as Box
+                : Box.fromString(row['bounds'].toString())),
+      );
 
   Map<String, dynamic> toRow() => {
-    'id': id,
-    'name': name,
-    'location': location.toSqlLiteral(),
-    'bounds': bounds?.toSqlLiteral(),
-  };
+        'id': id,
+        'name': name,
+        'location': location.toSqlLiteral(),
+        'bounds': bounds?.toSqlLiteral(),
+      };
 
   factory Place.fromJson(Map<String, dynamic> json) => Place.fromRow(json);
 
@@ -429,47 +431,47 @@ class Review with Preloadable {
   });
 
   factory Review.fromRow(Map<String, dynamic> row) => Review(
-    id: row['id'] as int?,
-    bookId: row['book_id'] as int?,
-    reviewerId: row['reviewer_id'] as int?,
-    rating: row['rating'] as int?,
-    verdict: ReviewVerdictGisila.parse(row['verdict'].toString()),
-    tags: row['tags'] == null
-        ? null
-        : (row['tags'] is List
-              ? (row['tags'] as List)
+        id: row['id'] as int?,
+        bookId: row['book_id'] as int?,
+        reviewerId: row['reviewer_id'] as int?,
+        rating: row['rating'] as int?,
+        verdict: ReviewVerdictGisila.parse(row['verdict'].toString()),
+        tags: row['tags'] == null
+            ? null
+            : (row['tags'] is List
+                ? (row['tags'] as List)
                     .map((e) => e.toString())
                     .toList()
                     .cast<String>()
-              : <String>[]),
-    reviewText: row['review_text'] as String?,
-    reviewDate: row['review_date'] is DateTime
-        ? row['review_date'] as DateTime
-        : DateTime.parse(row['review_date'].toString()),
-    isApproved: row['is_approved'] as bool,
-    isFlagged: row['is_flagged'] as bool,
-    isDeleted: row['is_deleted'] as bool,
-    isSpam: row['is_spam'] as bool,
-    isInappropriate: row['is_inappropriate'] as bool,
-    isHarmful: row['is_harmful'] as bool,
-  );
+                : <String>[]),
+        reviewText: row['review_text'] as String?,
+        reviewDate: row['review_date'] is DateTime
+            ? row['review_date'] as DateTime
+            : DateTime.parse(row['review_date'].toString()),
+        isApproved: row['is_approved'] as bool,
+        isFlagged: row['is_flagged'] as bool,
+        isDeleted: row['is_deleted'] as bool,
+        isSpam: row['is_spam'] as bool,
+        isInappropriate: row['is_inappropriate'] as bool,
+        isHarmful: row['is_harmful'] as bool,
+      );
 
   Map<String, dynamic> toRow() => {
-    'id': id,
-    'book_id': bookId,
-    'reviewer_id': reviewerId,
-    'rating': rating,
-    'verdict': verdict.sqlValue,
-    'tags': tags,
-    'review_text': reviewText,
-    'review_date': reviewDate,
-    'is_approved': isApproved,
-    'is_flagged': isFlagged,
-    'is_deleted': isDeleted,
-    'is_spam': isSpam,
-    'is_inappropriate': isInappropriate,
-    'is_harmful': isHarmful,
-  };
+        'id': id,
+        'book_id': bookId,
+        'reviewer_id': reviewerId,
+        'rating': rating,
+        'verdict': verdict.sqlValue,
+        'tags': tags,
+        'review_text': reviewText,
+        'review_date': reviewDate,
+        'is_approved': isApproved,
+        'is_flagged': isFlagged,
+        'is_deleted': isDeleted,
+        'is_spam': isSpam,
+        'is_inappropriate': isInappropriate,
+        'is_harmful': isHarmful,
+      };
 
   factory Review.fromJson(Map<String, dynamic> json) => Review.fromRow(json);
 
@@ -498,22 +500,23 @@ class Review with Preloadable {
     bool? isSpam,
     bool? isInappropriate,
     bool? isHarmful,
-  }) => Review(
-    id: id ?? this.id,
-    bookId: bookId ?? this.bookId,
-    reviewerId: reviewerId ?? this.reviewerId,
-    rating: rating ?? this.rating,
-    verdict: verdict ?? this.verdict,
-    tags: tags ?? this.tags,
-    reviewText: reviewText ?? this.reviewText,
-    reviewDate: reviewDate ?? this.reviewDate,
-    isApproved: isApproved ?? this.isApproved,
-    isFlagged: isFlagged ?? this.isFlagged,
-    isDeleted: isDeleted ?? this.isDeleted,
-    isSpam: isSpam ?? this.isSpam,
-    isInappropriate: isInappropriate ?? this.isInappropriate,
-    isHarmful: isHarmful ?? this.isHarmful,
-  );
+  }) =>
+      Review(
+        id: id ?? this.id,
+        bookId: bookId ?? this.bookId,
+        reviewerId: reviewerId ?? this.reviewerId,
+        rating: rating ?? this.rating,
+        verdict: verdict ?? this.verdict,
+        tags: tags ?? this.tags,
+        reviewText: reviewText ?? this.reviewText,
+        reviewDate: reviewDate ?? this.reviewDate,
+        isApproved: isApproved ?? this.isApproved,
+        isFlagged: isFlagged ?? this.isFlagged,
+        isDeleted: isDeleted ?? this.isDeleted,
+        isSpam: isSpam ?? this.isSpam,
+        isInappropriate: isInappropriate ?? this.isInappropriate,
+        isHarmful: isHarmful ?? this.isHarmful,
+      );
 
   /// Returns validation errors for this instance.
   ///
@@ -534,12 +537,12 @@ class Review with Preloadable {
 
   static final Relation<Review, User> reviewer =
       BelongsToRelation<Review, User>(
-        parentTable: 'reviews',
-        childTable: 'users',
-        name: 'reviewer',
-        parentForeignKey: 'reviewer_id',
-        childMeta: UserTable.metadata,
-      );
+    parentTable: 'reviews',
+    childTable: 'users',
+    name: 'reviewer',
+    parentForeignKey: 'reviewer_id',
+    childMeta: UserTable.metadata,
+  );
 
   /// Preloaded book; null when not preloaded or absent.
   Book? get bookLoaded => preloaded<Book>('book');
@@ -650,24 +653,24 @@ class User with Preloadable {
   });
 
   factory User.fromRow(Map<String, dynamic> row) => User(
-    id: row['id'] as int?,
-    firstName: row['first_name'] as String,
-    lastName: row['last_name'] as String?,
-    email: row['email'] as String,
-    password: row['password'] as String,
-    dateJoined: row['date_joined'] is DateTime
-        ? row['date_joined'] as DateTime
-        : DateTime.parse(row['date_joined'].toString()),
-  );
+        id: row['id'] as int?,
+        firstName: row['first_name'] as String,
+        lastName: row['last_name'] as String?,
+        email: row['email'] as String,
+        password: row['password'] as String,
+        dateJoined: row['date_joined'] is DateTime
+            ? row['date_joined'] as DateTime
+            : DateTime.parse(row['date_joined'].toString()),
+      );
 
   Map<String, dynamic> toRow() => {
-    'id': id,
-    'first_name': firstName,
-    'last_name': lastName,
-    'email': email,
-    'password': password,
-    'date_joined': dateJoined,
-  };
+        'id': id,
+        'first_name': firstName,
+        'last_name': lastName,
+        'email': email,
+        'password': password,
+        'date_joined': dateJoined,
+      };
 
   factory User.fromJson(Map<String, dynamic> json) => User.fromRow(json);
 
@@ -688,14 +691,15 @@ class User with Preloadable {
     String? email,
     String? password,
     DateTime? dateJoined,
-  }) => User(
-    id: id ?? this.id,
-    firstName: firstName ?? this.firstName,
-    lastName: lastName ?? this.lastName,
-    email: email ?? this.email,
-    password: password ?? this.password,
-    dateJoined: dateJoined ?? this.dateJoined,
-  );
+  }) =>
+      User(
+        id: id ?? this.id,
+        firstName: firstName ?? this.firstName,
+        lastName: lastName ?? this.lastName,
+        email: email ?? this.email,
+        password: password ?? this.password,
+        dateJoined: dateJoined ?? this.dateJoined,
+      );
 
   /// Returns validation errors for this instance.
   ///
@@ -714,14 +718,14 @@ class User with Preloadable {
 
   static final Relation<User, Book> reviewedBooks =
       ManyToManyRelation<User, Book>(
-        parentTable: 'users',
-        childTable: 'books',
-        name: 'reviewedBooks',
-        junctionTable: 'books_users',
-        junctionParentKey: 'user_id',
-        junctionChildKey: 'book_id',
-        childMeta: BookTable.metadata,
-      );
+    parentTable: 'users',
+    childTable: 'books',
+    name: 'reviewedBooks',
+    junctionTable: 'books_users',
+    junctionParentKey: 'user_id',
+    junctionChildKey: 'book_id',
+    childMeta: BookTable.metadata,
+  );
 
   static final Relation<User, Review> reviews = HasManyRelation<User, Review>(
     parentTable: 'users',

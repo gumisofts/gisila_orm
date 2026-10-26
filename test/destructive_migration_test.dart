@@ -6,8 +6,8 @@ import 'package:gisila_orm/migrations/schema_differ.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
-SchemaDiff _diff(String oldYaml, String newYaml) => SchemaDiffer()
-    .compareSchemas(
+SchemaDiff _diff(String oldYaml, String newYaml) =>
+    SchemaDiffer().compareSchemas(
         SchemaDefinition.fromYaml(oldYaml), SchemaDefinition.fromYaml(newYaml));
 
 String _user(String columns) => 'User:\n  columns:\n$columns';
@@ -25,13 +25,13 @@ void main() {
   group('destructive classification', () {
     test('dropped columns and tables are destructive', () {
       final col = _diff(_user(_name + _bio + _age), _user(_name + _age));
-      expect(col.destructiveChanges.map((c) => c.type),
-          [ChangeType.dropColumn]);
+      expect(
+          col.destructiveChanges.map((c) => c.type), [ChangeType.dropColumn]);
 
-      final table = _diff(
-          '${_user(_name)}Post:\n  columns:\n$_name', _user(_name));
-      expect(table.destructiveChanges.map((c) => c.type),
-          [ChangeType.dropTable]);
+      final table =
+          _diff('${_user(_name)}Post:\n  columns:\n$_name', _user(_name));
+      expect(
+          table.destructiveChanges.map((c) => c.type), [ChangeType.dropTable]);
     });
 
     test('adding a column or index is not destructive', () {
@@ -42,10 +42,10 @@ void main() {
 
     test('widening types is not destructive, narrowing is', () {
       String typed(String type) => _user('    n:\n      type: $type\n');
-      expect(_diff(typed('integer'), typed('bigint')).destructiveChanges,
-          isEmpty);
-      expect(_diff(typed('varchar'), typed('text')).destructiveChanges,
-          isEmpty);
+      expect(
+          _diff(typed('integer'), typed('bigint')).destructiveChanges, isEmpty);
+      expect(
+          _diff(typed('varchar'), typed('text')).destructiveChanges, isEmpty);
       expect(_diff(typed('bigint'), typed('integer')).destructiveChanges,
           hasLength(1));
       expect(_diff(typed('text'), typed('integer')).destructiveChanges,
@@ -68,8 +68,8 @@ void main() {
       final d = _diff(_user(_name + _age), _user(_name));
       await expectLater(
         SchemaDiffer().generateMigrationFile(d, tmp.path, 'drop_age'),
-        throwsA(isA<DestructiveMigrationException>().having(
-            (e) => e.toString(), 'message', contains('users.age'))),
+        throwsA(isA<DestructiveMigrationException>()
+            .having((e) => e.toString(), 'message', contains('users.age'))),
       );
       expect(await _sqlFiles(tmp), isEmpty);
     });
@@ -85,8 +85,8 @@ void main() {
     test('comments guessed renames without semicolons', () async {
       final d = _diff(_user(_bio), _user('    about:\n      type: text\n'));
       await SchemaDiffer().generateMigrationFile(d, tmp.path, 'rename');
-      final up = (await _sqlFiles(tmp))
-          .firstWhere((s) => s.contains('-- Migration:'));
+      final up =
+          (await _sqlFiles(tmp)).firstWhere((s) => s.contains('-- Migration:'));
       final comments =
           up.split('\n').where((l) => l.startsWith('-- GUESSED RENAME'));
       expect(comments, isNotEmpty);

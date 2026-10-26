@@ -170,8 +170,8 @@ void main() {
         await Directory('${tmp.path}/migrations').create();
         await File('${tmp.path}/migrations/1000_initial_schema.up.sql')
             .writeAsString(_upSql);
-        await File('${tmp.path}/migrations/1001_add_col.up.sql').writeAsString(
-            'ALTER TABLE widgets ADD COLUMN size INT;');
+        await File('${tmp.path}/migrations/1001_add_col.up.sql')
+            .writeAsString('ALTER TABLE widgets ADD COLUMN size INT;');
 
         final res = await manager.up(await manager.discoverIn(tmp.path));
         return res.applied.map((m) => m.id).toList();

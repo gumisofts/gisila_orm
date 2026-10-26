@@ -68,9 +68,8 @@ class Database {
     for (final name in config.connectionNames) {
       final c = config.getConnection(name)!;
       if (c.effectiveSslMode != DatabaseSslMode.prefer) continue;
-      db._preferredSsl[name] = await _serverSupportsTls(c)
-          ? SslMode.require
-          : SslMode.disable;
+      db._preferredSsl[name] =
+          await _serverSupportsTls(c) ? SslMode.require : SslMode.disable;
     }
 
     if (eager) {
@@ -174,8 +173,8 @@ class Database {
         ..setInt32(4, 80877103);
       socket.add(request.buffer.asUint8List());
       await socket.flush();
-      final reply = await socket.first
-          .timeout(Duration(seconds: c.connectionTimeout));
+      final reply =
+          await socket.first.timeout(Duration(seconds: c.connectionTimeout));
       return reply.isNotEmpty && reply.first == 0x53; // 'S'
     } on Object {
       return true;
