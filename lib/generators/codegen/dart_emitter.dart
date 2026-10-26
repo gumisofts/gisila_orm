@@ -56,8 +56,7 @@ String _emitEnum(EnumDefinition e) {
     ..writeln('    for (final v in ${e.name}.values) {')
     ..writeln('      if (v.name == raw) return v;')
     ..writeln('    }')
-    ..writeln(
-        "    throw FormatException('Unknown ${e.name} value: \$raw');")
+    ..writeln("    throw FormatException('Unknown ${e.name} value: \$raw');")
     ..writeln('  }')
     ..writeln('}');
   return buf.toString();
@@ -193,8 +192,7 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
     } else {
       buf
         ..writeln('    if ($name.trim().isEmpty) {')
-        ..writeln(
-            "      errors.add('${model.name}.$name must not be blank');")
+        ..writeln("      errors.add('${model.name}.$name must not be blank');")
         ..writeln('    }');
     }
   }
@@ -217,8 +215,7 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
     final relAccessor = relName.isEmpty ? _camel(col.name) : relName;
     buf
       ..writeln()
-      ..writeln(
-          '  static final Relation<${model.name}, $ref> $relAccessor =')
+      ..writeln('  static final Relation<${model.name}, $ref> $relAccessor =')
       ..writeln('      BelongsToRelation<${model.name}, $ref>(')
       ..writeln("        parentTable: '${model.tableName}',")
       ..writeln("        childTable: '${_tableOf(ref, schema)}',")
@@ -290,17 +287,14 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
     } else {
       final fkColumn = inverse.physicalFromColumn;
       final useHasOne = inverse.isUnique;
-      final relationClass =
-          useHasOne ? 'HasOneRelation' : 'HasManyRelation';
-      final kind =
-          useHasOne ? RelationKind.hasOne : RelationKind.hasMany;
+      final relationClass = useHasOne ? 'HasOneRelation' : 'HasManyRelation';
+      final kind = useHasOne ? RelationKind.hasOne : RelationKind.hasMany;
       buf
         ..writeln()
         ..writeln(
             '  static final Relation<${model.name}, ${inverse.fromModel}> '
             '$relName =')
-        ..writeln(
-            '      $relationClass<${model.name}, ${inverse.fromModel}>(')
+        ..writeln('      $relationClass<${model.name}, ${inverse.fromModel}>(')
         ..writeln("        parentTable: '${model.tableName}',")
         ..writeln(
             "        childTable: '${_tableOf(inverse.fromModel, schema)}',")

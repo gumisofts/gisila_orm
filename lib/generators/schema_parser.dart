@@ -602,7 +602,8 @@ class SchemaDefinition {
         continue;
       }
       final localEnums = parser._parseEnumsBlock(root);
-      errors.addAll(parser._errors.where((e) => e.level == SchemaErrorLevel.error));
+      errors.addAll(
+          parser._errors.where((e) => e.level == SchemaErrorLevel.error));
       parser._errors.clear();
 
       for (final e in localEnums) {
@@ -657,7 +658,8 @@ class SchemaDefinition {
         hint: 'rename the enum or the model so the names are unique',
         notes: [
           if (enumSource[name] != null) 'enum in ${enumSource[name]}',
-          if (modelNameSource[name] != null) 'model in ${modelNameSource[name]}',
+          if (modelNameSource[name] != null)
+            'model in ${modelNameSource[name]}',
         ],
       ));
     }
@@ -908,12 +910,10 @@ void _crossValidateModels(
       ).span(0);
 
       final target = modelByName[rel.references];
-      if (target != null &&
-          target.columns.any((c) => c.name == reverseName)) {
+      if (target != null && target.columns.any((c) => c.name == reverseName)) {
         errors.add(SchemaError(
           code: 'reverse_name_collision',
-          message:
-              '`reverse_name: $reverseName` collides with existing column '
+          message: '`reverse_name: $reverseName` collides with existing column '
               '"${target.name}.$reverseName"',
           span: span,
           hint: 'pick a different `reverse_name` to avoid shadowing',
@@ -1103,8 +1103,7 @@ class _SchemaParser {
     }
 
     final localEnums = _parseEnumsBlock(root);
-    final enumsByName = projectEnums ??
-        {for (final e in localEnums) e.name: e};
+    final enumsByName = projectEnums ?? {for (final e in localEnums) e.name: e};
     final enumNames = enumsByName.keys.toSet();
     final localModelNames = _collectModelNames(root);
     final modelNames = projectModelNames ?? localModelNames;
@@ -1286,7 +1285,9 @@ class _SchemaParser {
     for (final entry in enumsNode.nodes.entries) {
       final keyNode = entry.key as YamlNode;
       final name = keyNode.value;
-      if (name is! String || name.isEmpty || !_identifierPattern.hasMatch(name)) {
+      if (name is! String ||
+          name.isEmpty ||
+          !_identifierPattern.hasMatch(name)) {
         _errors.add(SchemaError(
           code: 'invalid_enum_name',
           message: 'enum names must be non-empty PascalCase identifiers',
@@ -1653,8 +1654,10 @@ class _SchemaParser {
     final isBuiltin = !isForeignKeyAlias &&
         !isArrayType &&
         _builtinTypeStrings.contains(typeLower);
-    final isEnumType =
-        !isBuiltin && !isForeignKeyAlias && !isArrayType && enumsByName.containsKey(typeValue);
+    final isEnumType = !isBuiltin &&
+        !isForeignKeyAlias &&
+        !isArrayType &&
+        enumsByName.containsKey(typeValue);
     final referencesNode = valueNode.nodes['references'];
     final manyToManyNode = valueNode.nodes['many_to_many'];
     final isM2M = manyToManyNode?.value == true;
@@ -1752,7 +1755,8 @@ class _SchemaParser {
       if (isM2M) {
         _errors.add(SchemaError(
           code: 'invalid_relationship',
-          message: '`many_to_many` cannot be combined with `type: foreign_key`; '
+          message:
+              '`many_to_many` cannot be combined with `type: foreign_key`; '
               'use `type: <Model>` with `many_to_many: true` instead',
           span: manyToManyNode!.span,
         ));

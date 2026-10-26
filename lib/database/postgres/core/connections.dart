@@ -5,6 +5,8 @@
 library gisila.database.postgres.core.connections;
 
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:gisila_orm/config/database_config.dart';
 import 'package:gisila_orm/database/postgres/exceptions/exceptions.dart';
@@ -33,6 +35,10 @@ class Database {
 
   final DatabaseConfig _config;
   final Map<String, Pool<Connection>> _pools;
+
+  /// What `prefer` resolved to per connection name, decided once in
+  /// [connect] by asking each server whether it speaks TLS.
+  final Map<String, SslMode> _preferredSsl = {};
   final Future<void> Function(Connection connection)? _onOpen;
   String _defaultName;
 
@@ -58,6 +64,13 @@ class Database {
 
     final pools = <String, Pool<Connection>>{};
     final db = Database._(config, pools, defaultName, onOpen);
+
+    for (final name in config.connectionNames) {
+      final c = config.getConnection(name)!;
+      if (c.effectiveSslMode != DatabaseSslMode.prefer) continue;
+      db._preferredSsl[name] =
+          await _serverSupportsTls(c) ? SslMode.require : SslMode.disable;
+    }
 
     if (eager) {
       for (final name in config.connectionNames) {
@@ -100,7 +113,13 @@ class Database {
 
     final settings = PoolSettings(
       maxConnectionCount: connection.maxConnections,
-      sslMode: connection.useSSL ? SslMode.require : SslMode.disable,
+      sslMode: switch (connection.effectiveSslMode) {
+        DatabaseSslMode.disable => SslMode.disable,
+        DatabaseSslMode.prefer => _preferredSsl[name] ?? SslMode.require,
+        DatabaseSslMode.require => SslMode.require,
+        DatabaseSslMode.verifyFull => SslMode.verifyFull,
+      },
+      securityContext: _securityContextFor(connection),
       connectTimeout: Duration(seconds: connection.connectionTimeout),
       queryTimeout: Duration(seconds: connection.queryTimeout),
       applicationName:
@@ -111,6 +130,57 @@ class Database {
     final pool = Pool<Connection>.withEndpoints([endpoint], settings: settings);
     _pools[name] = pool;
     return pool;
+  }
+
+  /// CA files already added to [SecurityContext.defaultContext].
+  static final Set<String> _trustedCaFiles = {};
+
+  /// A TLS context trusting only [DatabaseConnection.sslRootCert], or null
+  /// to use the system trust store.
+  ///
+  /// `package:postgres` (3.5.x) drops a pool's `securityContext` when it
+  /// opens connections, so the CA is also added to the process-wide
+  /// default context, which TLS falls back to. The effect is that the CA
+  /// is trusted in addition to the system roots, for this whole process.
+  static SecurityContext? _securityContextFor(DatabaseConnection c) {
+    final caFile = c.sslRootCert;
+    if (caFile == null) return null;
+    try {
+      final context = SecurityContext(withTrustedRoots: false)
+        ..setTrustedCertificates(caFile);
+      if (_trustedCaFiles.add(caFile)) {
+        SecurityContext.defaultContext.setTrustedCertificates(caFile);
+      }
+      return context;
+    } on Object catch (e) {
+      throw DatabaseConfigurationException(
+          'Cannot load sslrootcert "$caFile" for connection "${c.name}": $e');
+    }
+  }
+
+  /// Sends Postgres's SSLRequest and reads the one-byte answer: `S` means
+  /// the server will speak TLS, `N` means it won't. This is how libpq's
+  /// `sslmode=prefer` decides. Assumes TLS when the server can't be
+  /// reached, so the real connection attempt reports the error.
+  static Future<bool> _serverSupportsTls(DatabaseConnection c) async {
+    Socket? socket;
+    try {
+      socket = await Socket.connect(c.host, c.port,
+          timeout: Duration(seconds: c.connectionTimeout));
+      // Length 8, then the SSLRequest code 80877103 (1234 << 16 | 5679).
+      final request = ByteData(8)
+        ..setInt32(0, 8)
+        ..setInt32(4, 80877103);
+      socket.add(request.buffer.asUint8List());
+      await socket.flush();
+      final reply =
+          await socket.first.timeout(Duration(seconds: c.connectionTimeout));
+      return reply.isNotEmpty && reply.first == 0x53; // 'S'
+    } on Object {
+      return true;
+    } finally {
+      socket?.destroy();
+    }
   }
 
   /// Switch the default named connection used by [execute] and
@@ -163,6 +233,18 @@ class Database {
     } on ServerException catch (e) {
       throw PostgresErrorMapper.fromServerException(e);
     }
+  }
+
+  /// Run [body] on one connection borrowed from the pool for its whole
+  /// duration, so session state (advisory locks, session `SET`s) carries
+  /// across statements. Undo any session state before returning: the
+  /// connection goes back to the pool afterwards.
+  Future<R> withConnection<R>(
+    Future<R> Function(ConnectionDbContext connection) body, {
+    String? connectionName,
+  }) {
+    final pool = _poolFor(connectionName ?? _defaultName);
+    return pool.withConnection((conn) => body(ConnectionDbContext(conn)));
   }
 
   /// Cheap liveness check (`SELECT 1`).

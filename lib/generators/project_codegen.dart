@@ -62,10 +62,9 @@ Future<List<File>> discoverSchemaFiles(Directory root) async {
     }
   }
 
-  files.sort((a, b) =>
-      p.relative(a.path, from: rootPath).compareTo(
-            p.relative(b.path, from: rootPath),
-          ));
+  files.sort((a, b) => p.relative(a.path, from: rootPath).compareTo(
+        p.relative(b.path, from: rootPath),
+      ));
   return files;
 }
 
@@ -122,10 +121,15 @@ Future<ProjectCodegenResult> generateProjectSchema(Directory root) async {
 ///
 /// Snapshot path: [projectSnapshotRelativePath].
 /// Returns the migration name when a file was written, otherwise `null`.
+///
+/// Throws [DestructiveMigrationException] (leaving the snapshot as it was,
+/// so the next run sees the same diff) when the change would lose data
+/// and [allowDestructive] is false.
 Future<String?> generateProjectIncrementalMigration(
   Directory root, {
   SchemaDefinition? schema,
   Directory? migrationsDir,
+  bool allowDestructive = false,
 }) async {
   final files = await discoverSchemaFiles(root);
   final current = schema ?? await SchemaDefinition.fromProject(files);
@@ -133,31 +137,76 @@ Future<String?> generateProjectIncrementalMigration(
   await snapshotFile.parent.create(recursive: true);
 
   final yaml = emitSchemaYaml(current);
+  final outDir = migrationsDir ?? await _resolveMigrationsDir(root, files);
 
-  if (!await snapshotFile.exists()) {
-    await snapshotFile.writeAsString(yaml);
-    return null;
+  final hadSnapshot = await snapshotFile.exists();
+  final oldSchema = hadSnapshot
+      ? SchemaDefinition.fromYaml(
+          await snapshotFile.readAsString(),
+          sourceUrl: snapshotFile.uri,
+        )
+      : current;
+
+  // Incremental migrations are diffs, so a fresh database also needs the
+  // schema they start from. Write it once, from the snapshot state, unless
+  // the project already keeps its own migrations.
+  String? written;
+  if (!await _hasOwnMigrations(root, outDir)) {
+    await _writeInitialMigration(outDir, oldSchema);
+    written = initialMigrationName;
   }
 
-  final oldSchema = SchemaDefinition.fromYaml(
-    await snapshotFile.readAsString(),
-    sourceUrl: snapshotFile.uri,
-  );
+  if (!hadSnapshot) {
+    await snapshotFile.writeAsString(yaml);
+    return written;
+  }
+
   final differ = SchemaDiffer();
   final diff = differ.compareSchemas(oldSchema, current);
   if (diff.isEmpty) {
     await snapshotFile.writeAsString(yaml);
-    return null;
+    return written;
   }
 
-  final outDir = migrationsDir ??
-      await _resolveMigrationsDir(root, files);
   await outDir.create(recursive: true);
 
   const migrationName = 'auto_project_changes';
-  await differ.generateMigrationFile(diff, outDir.path, migrationName);
+  await differ.generateMigrationFile(diff, outDir.path, migrationName,
+      allowDestructive: allowDestructive);
   await snapshotFile.writeAsString(yaml);
   return migrationName;
+}
+
+/// Name suffix of the baseline migration written by
+/// [generateProjectIncrementalMigration] (`<timestamp>_initial_schema`).
+const initialMigrationName = 'initial_schema';
+
+/// True when [migrationsDir] or the package's `lib/` already holds a
+/// migration other than the build_runner `*.gisila.up.sql` artifacts.
+Future<bool> _hasOwnMigrations(Directory root, Directory migrationsDir) async {
+  for (final dir in [migrationsDir, Directory(p.join(root.path, 'lib'))]) {
+    if (!await dir.exists()) continue;
+    await for (final e in dir.list(recursive: true, followLinks: false)) {
+      final name = p.basename(e.path);
+      if (e is File &&
+          name.endsWith('.up.sql') &&
+          !name.endsWith('.gisila.up.sql')) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+Future<void> _writeInitialMigration(
+  Directory outDir,
+  SchemaDefinition schema,
+) async {
+  await outDir.create(recursive: true);
+  final ts = DateTime.now().millisecondsSinceEpoch - 1;
+  final base = p.join(outDir.path, '${ts}_$initialMigrationName');
+  await File('$base.up.sql').writeAsString(emitUpSql(schema));
+  await File('$base.down.sql').writeAsString(emitDownSql(schema));
 }
 
 Future<Directory> _resolveOutputDir(Directory root, List<File> files) async {

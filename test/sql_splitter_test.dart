@@ -104,7 +104,8 @@ SELECT 1;
 
     test('handles backslash escapes inside E-strings', () {
       const sql = r"INSERT INTO t (v) VALUES (E'a\'; b');";
-      expect(splitSqlStatements(sql), [r"INSERT INTO t (v) VALUES (E'a\'; b')"]);
+      expect(
+          splitSqlStatements(sql), [r"INSERT INTO t (v) VALUES (E'a\'; b')"]);
     });
 
     test('tolerates a trailing statement with no semicolon', () {

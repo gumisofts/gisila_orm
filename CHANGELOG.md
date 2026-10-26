@@ -1,5 +1,68 @@
 # Changelog
 
+## Unreleased
+
+- Fix: `count()` ignores ORDER BY, LIMIT and OFFSET, so it counts every
+  matching row (Postgres used to reject the ORDER BY, and an OFFSET past
+  the first row threw). With DISTINCT or GROUP BY it counts distinct rows or
+  groups through a subquery.
+- Fix: `one()` and `first()` no longer change the query they are called on
+  (they used to leave `LIMIT 2` / `LIMIT 1` behind for the next call).
+- Fix: `eq(null)` / `neq(null)` compile to `IS NULL` / `IS NOT NULL`;
+  `= NULL` never matched anything.
+- Security: `safeTk` now escapes inner `"` in identifiers and `safe` escapes
+  inner `'` in literals. Both pass a value through unchanged only when it is
+  already a well-formed quoted token, so column names passed to `select()`,
+  `insert()` and `update()` can no longer inject SQL.
+- Migrations: the first `generate` run in a project without hand-written
+  migrations writes `migrations/<ts>_initial_schema.up.sql` (and `.down.sql`)
+  from the snapshot schema, so `migrate up` builds a fresh database. Projects
+  with a snapshot but no migrations get it backfilled on the next run.
+- Migrations: `discoverIn` uses the `*.gisila.up.sql` baseline when a
+  directory holds no other migration (the 0.1.5 regression applied nothing).
+- Migrations: databases that applied the baseline under 0.1.4
+  (`schema.gisila`) record `<ts>_initial_schema` as applied without
+  re-running it.
+- Docs: CLI examples use `dart run gisila_orm:migrate` / `gisila_orm:generate`.
+- Migrations: `generate` and `migrate diff` refuse to write a migration that
+  can lose data (dropped tables, columns or enums, and column type changes
+  other than widening such as INTEGER→BIGINT or VARCHAR(n)→TEXT). Nothing is
+  written and the snapshot stays put until you re-run with
+  `--allow-destructive`. `SchemaDiff.destructiveChanges` lists them, and
+  `generateMigrationFile` throws `DestructiveMigrationException` unless
+  `allowDestructive: true`.
+- Migrations: renames the differ guesses from a drop+add are marked with a
+  `-- GUESSED RENAME` comment in the SQL and a warning on stdout, and
+  destructive steps with `-- DESTRUCTIVE`.
+- Migrations: `up` and `down` hold a Postgres advisory lock (keyed on the
+  schema and tracking table) for the whole run, so two deploys migrating
+  the same database take turns instead of racing.
+- Migrations: the tracking table gains a `checksum` column (added in place
+  on first run). `up` refuses with `MigrationChecksumException` when an
+  applied migration's file was edited since; `migrate status` marks those.
+  Rows applied before this release get their checksum recorded from the
+  current file on the next `up`.
+- Migrations: a `-- gisila:no-transaction` line runs that file outside the
+  per-migration transaction, for statements like
+  `CREATE INDEX CONCURRENTLY`.
+- `Database.withConnection` runs a callback on one pinned pool connection
+  (`ConnectionDbContext`).
+- Migrations: a table added after the first migration now gets its foreign
+  keys, `is_index`/`indexes:` indexes and many-to-many junction tables, as a
+  fresh install would. Foreign keys and junctions are added after every
+  table exists. Removing a many-to-many drops its junction table (counted
+  as destructive).
+- Security: `DATABASE_URL` parsing follows libpq. `sslmode=verify-full` and
+  `verify-ca` now verify the certificate (they used to turn TLS off, as did
+  everything but `require`); `prefer`/`allow` use TLS when the server offers
+  it; unknown values are rejected. `sslrootcert` trusts a CA file (also
+  added to the process-wide default context, since `package:postgres`
+  ignores a pool's `securityContext`). User, password and database are
+  percent-decoded, and the password is split on the first `:` only. New
+  `DatabaseConnection.fromUrl`, `DatabaseSslMode`, `sslMode`/`sslRootCert`
+  fields and YAML `ssl_mode`/`ssl_root_cert`. `connectionString`
+  percent-encodes credentials.
+
 ## 0.1.5
 
 - Migrations: `discoverIn` skips `*.gisila.up.sql` / `*.gisila.down.sql`

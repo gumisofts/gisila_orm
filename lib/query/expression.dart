@@ -60,8 +60,15 @@ class ColumnRef<T> extends Expr<T> {
 
   // Comparison operators -------------------------------------------------
 
-  Expr<bool> eq(T value) => BinOp<bool>(this, '=', Literal<T>(value));
-  Expr<bool> neq(T value) => BinOp<bool>(this, '<>', Literal<T>(value));
+  /// `eq(null)` compiles to `IS NULL` (`= NULL` never matches in SQL).
+  Expr<bool> eq(T value) => value == null
+      ? NullCheck(this, true)
+      : BinOp<bool>(this, '=', Literal<T>(value));
+
+  /// `neq(null)` compiles to `IS NOT NULL`.
+  Expr<bool> neq(T value) => value == null
+      ? NullCheck(this, false)
+      : BinOp<bool>(this, '<>', Literal<T>(value));
   Expr<bool> gt(T value) => BinOp<bool>(this, '>', Literal<T>(value));
   Expr<bool> gte(T value) => BinOp<bool>(this, '>=', Literal<T>(value));
   Expr<bool> lt(T value) => BinOp<bool>(this, '<', Literal<T>(value));

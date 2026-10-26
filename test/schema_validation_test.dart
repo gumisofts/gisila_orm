@@ -343,7 +343,8 @@ Tag:
       max_length: 64
 ''';
       final schema = SchemaDefinition.fromYaml(yaml);
-      final col = schema.getModel('Tag')!.columns.firstWhere((c) => c.name == 'slug');
+      final col =
+          schema.getModel('Tag')!.columns.firstWhere((c) => c.name == 'slug');
       expect(col.constraints.maxLength, 64);
       expect(col.postgresType, 'VARCHAR(64)');
     });

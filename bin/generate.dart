@@ -3,11 +3,15 @@
 // Discovers all `*.gisila.yaml` files, merges them into one project schema,
 // emits a single Dart + up/down SQL bundle, and auto-generates an incremental
 // migration by diffing against the previous merged snapshot.
+//
+// A migration that would lose data (dropped tables/columns/enums, narrowing
+// type changes) is refused unless --allow-destructive is passed.
 
 import 'dart:io';
 
 import 'package:gisila_orm/generators/project_codegen.dart';
 import 'package:gisila_orm/generators/schema_parser.dart';
+import 'package:gisila_orm/migrations/schema_differ.dart';
 
 Future<void> main(List<String> args) async {
   // Legacy build_runner passthrough: if the user passes --build-runner,
@@ -44,12 +48,16 @@ Future<void> main(List<String> args) async {
     final migration = await generateProjectIncrementalMigration(
       root,
       schema: result.schema,
+      allowDestructive: args.contains('--allow-destructive'),
     );
     if (migration != null) {
       stdout.writeln('Auto incremental migration generated: $migration');
     }
   } on SchemaValidationException catch (e) {
     stderr.writeln(e.format());
+    exit(1);
+  } on DestructiveMigrationException catch (e) {
+    stderr.writeln(e);
     exit(1);
   } catch (e, st) {
     stderr.writeln('Codegen failed: $e');
