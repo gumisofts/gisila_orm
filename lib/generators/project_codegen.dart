@@ -122,10 +122,15 @@ Future<ProjectCodegenResult> generateProjectSchema(Directory root) async {
 ///
 /// Snapshot path: [projectSnapshotRelativePath].
 /// Returns the migration name when a file was written, otherwise `null`.
+///
+/// Throws [DestructiveMigrationException] (leaving the snapshot as it was,
+/// so the next run sees the same diff) when the change would lose data
+/// and [allowDestructive] is false.
 Future<String?> generateProjectIncrementalMigration(
   Directory root, {
   SchemaDefinition? schema,
   Directory? migrationsDir,
+  bool allowDestructive = false,
 }) async {
   final files = await discoverSchemaFiles(root);
   final current = schema ?? await SchemaDefinition.fromProject(files);
@@ -168,7 +173,8 @@ Future<String?> generateProjectIncrementalMigration(
   await outDir.create(recursive: true);
 
   const migrationName = 'auto_project_changes';
-  await differ.generateMigrationFile(diff, outDir.path, migrationName);
+  await differ.generateMigrationFile(diff, outDir.path, migrationName,
+      allowDestructive: allowDestructive);
   await snapshotFile.writeAsString(yaml);
   return migrationName;
 }

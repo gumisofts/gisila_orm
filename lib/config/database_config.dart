@@ -17,6 +17,46 @@ enum DatabaseType {
   postgresql,
 }
 
+/// How a connection uses TLS, following libpq's `sslmode` values.
+enum DatabaseSslMode {
+  /// Plain TCP. Passwords may travel in clear text.
+  disable,
+
+  /// TLS when the server supports it, plain TCP otherwise (libpq `allow`
+  /// and `prefer`). Like libpq, certificates aren't verified, and an
+  /// active attacker can force plain TCP.
+  prefer,
+
+  /// Always TLS, without verifying the server certificate.
+  require,
+
+  /// Always TLS, verifying the certificate chain and the host name
+  /// (libpq `verify-full`; `verify-ca` maps here too, since the driver
+  /// can't skip the host name check).
+  verifyFull;
+
+  /// Parses a libpq `sslmode` value (case-insensitive). Throws
+  /// [ArgumentError] for anything else rather than guessing.
+  static DatabaseSslMode parse(String value) {
+    switch (value.trim().toLowerCase()) {
+      case 'disable':
+        return DatabaseSslMode.disable;
+      case 'allow':
+      case 'prefer':
+        return DatabaseSslMode.prefer;
+      case 'require':
+        return DatabaseSslMode.require;
+      case 'verify-ca':
+      case 'verify-full':
+      case 'verify_full':
+      case 'verifyfull':
+        return DatabaseSslMode.verifyFull;
+    }
+    throw ArgumentError.value(value, 'sslmode',
+        'expected disable, allow, prefer, require, verify-ca or verify-full');
+  }
+}
+
 /// Configuration for a single named database connection.
 class DatabaseConnection {
   /// Connection identifier (used as the lookup name in [DatabaseConfig]).
@@ -40,8 +80,21 @@ class DatabaseConnection {
   /// Password for authentication.
   final String password;
 
-  /// Whether to require SSL.
+  /// Whether to require SSL. Kept for older configs; [sslMode] wins when
+  /// set. True whenever [effectiveSslMode] isn't `disable`.
   final bool useSSL;
+
+  /// How to use TLS. Null means [useSSL] decides (`require` or `disable`).
+  final DatabaseSslMode? sslMode;
+
+  /// PEM file of CA certificates to trust instead of the system store,
+  /// for [DatabaseSslMode.verifyFull] (libpq `sslrootcert`).
+  final String? sslRootCert;
+
+  /// The TLS mode actually used.
+  DatabaseSslMode get effectiveSslMode =>
+      sslMode ??
+      (useSSL ? DatabaseSslMode.require : DatabaseSslMode.disable);
 
   /// Connection establishment timeout in seconds.
   final int connectionTimeout;
@@ -68,6 +121,8 @@ class DatabaseConnection {
     required this.username,
     required this.password,
     this.useSSL = false,
+    this.sslMode,
+    this.sslRootCert,
     this.connectionTimeout = 30,
     this.queryTimeout = 30,
     this.maxConnections = 10,
@@ -84,6 +139,8 @@ class DatabaseConnection {
     required String password,
     int port = 5432,
     bool useSSL = false,
+    DatabaseSslMode? sslMode,
+    String? sslRootCert,
     int connectionTimeout = 30,
     int queryTimeout = 30,
     int maxConnections = 10,
@@ -99,6 +156,8 @@ class DatabaseConnection {
         username: username,
         password: password,
         useSSL: useSSL,
+        sslMode: sslMode,
+        sslRootCert: sslRootCert,
         connectionTimeout: connectionTimeout,
         queryTimeout: queryTimeout,
         maxConnections: maxConnections,
@@ -123,6 +182,10 @@ class DatabaseConnection {
       username: (config['username'] as String?) ?? 'postgres',
       password: (config['password'] as String?) ?? '',
       useSSL: (config['ssl'] as bool?) ?? false,
+      sslMode: config['ssl_mode'] == null
+          ? null
+          : DatabaseSslMode.parse(config['ssl_mode'].toString()),
+      sslRootCert: config['ssl_root_cert'] as String?,
       connectionTimeout: (config['connection_timeout'] as int?) ?? 30,
       queryTimeout: (config['query_timeout'] as int?) ?? 30,
       maxConnections: (config['max_connections'] as int?) ?? 10,
@@ -149,6 +212,8 @@ class DatabaseConnection {
     };
 
     if (useSSL) map['ssl'] = useSSL;
+    if (sslMode != null) map['ssl_mode'] = _sslModeName(sslMode!);
+    if (sslRootCert != null) map['ssl_root_cert'] = sslRootCert;
     if (additionalParams.isNotEmpty) {
       map['additional_params'] = additionalParams;
     }
@@ -156,10 +221,83 @@ class DatabaseConnection {
     return map;
   }
 
-  /// Standard connection-string form (handy for logging or libpq tools).
+  /// Standard connection-string form (handy for libpq tools). Contains
+  /// the password, so don't log it.
   String get connectionString {
-    final ssl = useSSL ? '?sslmode=require' : '';
-    return 'postgresql://$username:$password@$host:$port/$database$ssl';
+    final query = <String, String>{
+      if (effectiveSslMode != DatabaseSslMode.disable)
+        'sslmode': _sslModeName(effectiveSslMode),
+      if (sslRootCert != null) 'sslrootcert': sslRootCert!,
+    };
+    return Uri(
+      scheme: 'postgresql',
+      userInfo: '${Uri.encodeComponent(username)}:'
+          '${Uri.encodeComponent(password)}',
+      host: host,
+      port: port,
+      path: '/${Uri.encodeComponent(database)}',
+      queryParameters: query.isEmpty ? null : query,
+    ).toString();
+  }
+
+  static String _sslModeName(DatabaseSslMode mode) => switch (mode) {
+        DatabaseSslMode.disable => 'disable',
+        DatabaseSslMode.prefer => 'prefer',
+        DatabaseSslMode.require => 'require',
+        DatabaseSslMode.verifyFull => 'verify-full',
+      };
+
+  /// Parses a `postgres://` / `postgresql://` URL such as `DATABASE_URL`.
+  ///
+  /// Credentials and the database name are percent-decoded, and the
+  /// password is everything after the first `:`, so it may contain `:`,
+  /// `@` (encoded) and so on. `sslmode` takes every libpq value (see
+  /// [DatabaseSslMode.parse]); `ssl=true` means `require`; `sslrootcert`
+  /// names a CA file. `user`/`password` query parameters override the
+  /// user info, as in libpq.
+  factory DatabaseConnection.fromUrl(String name, String url) {
+    final uri = Uri.parse(url);
+    if (uri.scheme != 'postgresql' && uri.scheme != 'postgres') {
+      throw ArgumentError('Unsupported database scheme: ${uri.scheme}');
+    }
+    final query = uri.queryParameters;
+
+    String? user;
+    String? password;
+    if (uri.userInfo.isNotEmpty) {
+      final colon = uri.userInfo.indexOf(':');
+      user = Uri.decodeComponent(
+          colon < 0 ? uri.userInfo : uri.userInfo.substring(0, colon));
+      if (colon >= 0) {
+        password = Uri.decodeComponent(uri.userInfo.substring(colon + 1));
+      }
+    }
+    user = query['user'] ?? user;
+    password = query['password'] ?? password;
+
+    DatabaseSslMode? sslMode;
+    if (query['sslmode'] != null) {
+      sslMode = DatabaseSslMode.parse(query['sslmode']!);
+    } else if (const {'true', '1', 'yes', 'require'}
+        .contains(query['ssl']?.toLowerCase())) {
+      sslMode = DatabaseSslMode.require;
+    }
+    final rootCert = query['sslrootcert'];
+
+    return DatabaseConnection(
+      name: name,
+      type: DatabaseType.postgresql,
+      host: uri.host.isEmpty ? 'localhost' : uri.host,
+      port: uri.hasPort ? uri.port : 5432,
+      // pathSegments are already percent-decoded.
+      database: uri.pathSegments.isNotEmpty ? uri.pathSegments.first : '',
+      username: (user == null || user.isEmpty) ? 'postgres' : user,
+      password: password ?? '',
+      useSSL: sslMode != null && sslMode != DatabaseSslMode.disable,
+      sslMode: sslMode,
+      // libpq's `system` means "the default trust store".
+      sslRootCert: rootCert == 'system' ? null : rootCert,
+    );
   }
 
   @override
@@ -258,24 +396,8 @@ class DatabaseConfig {
   static DatabaseConnection _parseConnectionString(
     String name,
     String connectionString,
-  ) {
-    final uri = Uri.parse(connectionString);
-    if (uri.scheme != 'postgresql' && uri.scheme != 'postgres') {
-      throw ArgumentError('Unsupported database scheme: ${uri.scheme}');
-    }
-
-    final userInfo = uri.userInfo.split(':');
-    return DatabaseConnection(
-      name: name,
-      type: DatabaseType.postgresql,
-      host: uri.host.isEmpty ? 'localhost' : uri.host,
-      port: uri.hasPort ? uri.port : 5432,
-      database: uri.pathSegments.isNotEmpty ? uri.pathSegments.first : '',
-      username: userInfo.isNotEmpty ? userInfo.first : 'postgres',
-      password: userInfo.length > 1 ? userInfo.last : '',
-      useSSL: uri.queryParameters['sslmode'] == 'require',
-    );
-  }
+  ) =>
+      DatabaseConnection.fromUrl(name, connectionString);
 
   /// Recursively convert a YamlMap/YamlList tree into plain Dart maps/lists.
   static dynamic _yamlToMap(dynamic yaml) {

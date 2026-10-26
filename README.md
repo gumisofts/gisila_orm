@@ -794,6 +794,23 @@ final config = await DatabaseConfig.fromEnvironment(
 );
 ```
 
+URLs follow libpq. Percent-encode special characters in the user name,
+password and database name (`p@ss:word` → `p%40ss%3Aword`); a `:` in the
+password also works unencoded. `sslmode` accepts every libpq value:
+
+| `sslmode` | Behaviour |
+| --- | --- |
+| *(absent)*, `disable` | No TLS |
+| `allow`, `prefer` | TLS if the server supports it, otherwise plain TCP |
+| `require` | TLS, certificate not checked |
+| `verify-ca`, `verify-full` | TLS with certificate and host name checked |
+
+Add `sslrootcert=/path/ca.pem` to trust a private CA (as with most managed
+Postgres). Because of a `package:postgres` limitation, that CA is trusted
+process-wide, alongside the system roots. Any other `sslmode` value is an
+error. In YAML, use `ssl_mode:` and `ssl_root_cert:` (or the older
+`ssl: true`, which means `require`).
+
 ### Programmatically
 
 ```dart
@@ -1172,6 +1189,14 @@ Merges all `*.gisila.yaml` files and writes the project bundle + optional
 invoke the legacy single-file `build_runner` builder instead (adds
 `--delete-conflicting-outputs` by default; `--no-delete` to opt out).
 
+If the change would lose data (a dropped table, column or enum, or a column
+type change that isn't a widening such as `INTEGER` → `BIGINT`), no
+migration is written and the snapshot is left as it was. Back up what you
+need, then re-run with `--allow-destructive`; the same flag applies to
+`migrate diff`. Renames the differ infers from a drop+add are written as
+`RENAME COLUMN` with a `-- GUESSED RENAME` comment, so check those before
+applying.
+
 ### `dart run gisila_orm:migrate <up|down|status> [flags]`
 
 Connection resolution (highest priority first):
@@ -1186,6 +1211,14 @@ Connection resolution (highest priority first):
 | `--dir <path>` | `lib` | Directory to scan for `*.up.sql` / `*.down.sql` pairs (recursive). |
 | `--config <yaml>` | `database.yaml` | Optional YAML seed; env vars still win for the default connection. |
 | `--steps <n>` | `1` | (`down` only) Number of recent batches to roll back. |
+
+`up` and `down` take a Postgres advisory lock, so concurrent deploys run
+one at a time. Each applied migration's checksum is stored, and `up` stops
+if an applied file has been edited since (`status` shows which). Put
+changes in a new migration instead. A file containing the line
+`-- gisila:no-transaction` runs outside the usual per-migration transaction,
+for statements such as `CREATE INDEX CONCURRENTLY`; if it fails part way,
+the earlier statements stay applied.
 
 Examples:
 

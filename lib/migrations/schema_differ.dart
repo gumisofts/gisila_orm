@@ -12,6 +12,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:gisila_orm/database/postgres/types/vector.dart';
 import 'package:gisila_orm/database/types.dart';
+import 'package:gisila_orm/generators/codegen/sql_emitter.dart';
 import 'package:gisila_orm/generators/schema_parser.dart';
 
 /// Double-quote a PostgreSQL identifier so reserved words (`desc`, `user`,
@@ -114,14 +115,40 @@ class SchemaDiff {
   final List<MigrationOperation> operations;
   final bool hasDestructiveChanges;
 
+  /// Changes that can lose data: dropped tables, columns and enums, and
+  /// column type changes that aren't a plain widening.
+  final List<SchemaChange> destructiveChanges;
+
   const SchemaDiff({
     required this.changes,
     required this.operations,
     required this.hasDestructiveChanges,
+    this.destructiveChanges = const [],
   });
 
   bool get isEmpty => changes.isEmpty;
   bool get isNotEmpty => changes.isNotEmpty;
+
+  /// Column renames inferred from a drop+add of compatible columns. They
+  /// keep the data, but into whichever column the differ guessed.
+  List<SchemaChange> get guessedRenames =>
+      changes.where((c) => c.metadata?['guessed'] == true).toList();
+}
+
+/// Thrown by [SchemaDiffer.generateMigrationFile] when a diff would lose
+/// data and the caller didn't pass `allowDestructive: true`.
+class DestructiveMigrationException implements Exception {
+  final List<SchemaChange> changes;
+
+  const DestructiveMigrationException(this.changes);
+
+  @override
+  String toString() => [
+        'The schema change would lose data, so no migration was written:',
+        for (final c in changes) '  - $c',
+        'Check these are intended (back up the data first if needed), then',
+        're-run with --allow-destructive.',
+      ].join('\n');
 }
 
 /// Schema differ class
@@ -132,6 +159,8 @@ class SchemaDiffer {
   // hardcoding `INTEGER ... REFERENCES ... ("id")`. Keyed by model name.
   Map<String, ModelDefinition> _oldModelsByName = const {};
   Map<String, ModelDefinition> _newModelsByName = const {};
+  SchemaDefinition? _oldSchema;
+  SchemaDefinition? _newSchema;
 
   /// Compare two schemas and generate diff
   SchemaDiff compareSchemas(
@@ -153,6 +182,8 @@ class SchemaDiffer {
 
     _oldModelsByName = oldModels;
     _newModelsByName = newModels;
+    _oldSchema = oldSchema;
+    _newSchema = newSchema;
 
     // If the old schema had no vector columns/indexes but the new
     // schema does, the pgvector extension may not be installed on the
@@ -180,19 +211,57 @@ class SchemaDiffer {
     // Find table changes
     _compareModels(oldModels, newModels, changes, operations);
 
-    // Check for destructive changes
-    final hasDestructive = changes.any((change) =>
-        change.type == ChangeType.dropTable ||
-        change.type == ChangeType.dropColumn ||
-        change.type == ChangeType.modifyColumn ||
-        change.type == ChangeType.dropEnum ||
-        change.type == ChangeType.dropCheck);
+    final destructive = changes.where(_losesData).toList();
 
     return SchemaDiff(
       changes: changes,
       operations: operations,
-      hasDestructiveChanges: hasDestructive,
+      hasDestructiveChanges: destructive.isNotEmpty,
+      destructiveChanges: destructive,
     );
+  }
+
+  /// Whether applying [change] can throw away existing data.
+  bool _losesData(SchemaChange change) {
+    switch (change.type) {
+      case ChangeType.dropTable:
+      case ChangeType.dropColumn:
+      case ChangeType.dropEnum:
+        return true;
+      case ChangeType.modifyColumn:
+        final oldCol = change.metadata?['oldColumn'];
+        final newCol = change.metadata?['newColumn'];
+        if (oldCol is! ColumnDefinition || newCol is! ColumnDefinition) {
+          return true;
+        }
+        final from = _resolvedPostgresType(oldCol, useOld: true);
+        final to = _resolvedPostgresType(newCol, useOld: false);
+        return from != to && !_isWideningType(from, to);
+      default:
+        return false;
+    }
+  }
+
+  static const _intWidths = ['SMALLINT', 'INTEGER', 'BIGINT'];
+  static final _varchar = RegExp(r'^(?:VARCHAR|CHARACTER VARYING)\((\d+)\)$');
+
+  /// True for type changes Postgres can make without losing any value:
+  /// a wider integer, REAL to DOUBLE PRECISION, or a longer/unbounded
+  /// VARCHAR.
+  static bool _isWideningType(String from, String to) {
+    from = from.trim().toUpperCase();
+    to = to.trim().toUpperCase();
+    final fi = _intWidths.indexOf(from);
+    final ti = _intWidths.indexOf(to);
+    if (fi >= 0 && ti >= 0) return ti >= fi;
+    if (from == 'REAL' && to == 'DOUBLE PRECISION') return true;
+    final fv = _varchar.firstMatch(from);
+    if (fv != null) {
+      if (to == 'TEXT' || to == 'VARCHAR') return true;
+      final tv = _varchar.firstMatch(to);
+      if (tv != null) return int.parse(tv[1]!) >= int.parse(fv[1]!);
+    }
+    return false;
   }
 
   void _compareEnums(
@@ -280,6 +349,22 @@ class SchemaDiffer {
     List<SchemaChange> changes,
     List<MigrationOperation> operations,
   ) {
+    // Junction tables of removed many-to-many relations go first: they
+    // reference tables that may be dropped below.
+    final oldJunctions = _junctions(_oldSchema!);
+    final newJunctions = _junctions(_newSchema!);
+    for (final entry in oldJunctions.entries) {
+      if (newJunctions.containsKey(entry.key)) continue;
+      final change =
+          SchemaChange(type: ChangeType.dropTable, tableName: entry.key);
+      changes.add(change);
+      operations.add(MigrationOperation(
+        upSql: 'DROP TABLE IF EXISTS ${_quoteIdent(entry.key)};',
+        downSql: emitJunctionTableSql(entry.value, _oldSchema!),
+        change: change,
+      ));
+    }
+
     // Dropped tables
     for (final oldModel in oldModels.values) {
       if (!newModels.containsKey(oldModel.name)) {
@@ -330,7 +415,45 @@ class SchemaDiffer {
         _compareChecks(oldModel, newModel, changes, operations);
       }
     }
+
+    // Foreign keys of new tables, once every table exists and every
+    // rename has run, so they can point at tables created or renamed in
+    // the same migration.
+    for (final newModel in newModels.values) {
+      if (oldModels.containsKey(newModel.name)) continue;
+      for (final col in newModel.foreignKeyColumns) {
+        final change = SchemaChange(
+          type: ChangeType.addForeignKey,
+          tableName: newModel.tableName,
+          columnName: col.name,
+        );
+        changes.add(change);
+        operations
+            .add(_generateAddForeignKeyOperation(newModel, col, change));
+      }
+    }
+
+    // Junction tables of new many-to-many relations, likewise last.
+    for (final entry in newJunctions.entries) {
+      if (oldJunctions.containsKey(entry.key)) continue;
+      final change =
+          SchemaChange(type: ChangeType.createTable, tableName: entry.key);
+      changes.add(change);
+      operations.add(MigrationOperation(
+        upSql: emitJunctionTableSql(entry.value, _newSchema!),
+        downSql: 'DROP TABLE IF EXISTS ${_quoteIdent(entry.key)};',
+        change: change,
+      ));
+    }
   }
+
+  /// Junction tables of [schema]'s many-to-many relations, by table name.
+  /// Both directions of a relation share one junction, as in sql_emitter.
+  Map<String, RelationshipInfo> _junctions(SchemaDefinition schema) => {
+        for (final rel in schema.relationships.reversed)
+          if (rel.isManyToMany && rel.junctionTableName.isNotEmpty)
+            rel.junctionTableName: rel,
+      };
 
   void _compareChecks(
     ModelDefinition oldModel,
@@ -437,6 +560,7 @@ class SchemaDiffer {
         tableName: newModel.tableName,
         oldName: r.oldName,
         newName: r.newName,
+        metadata: const {'guessed': true},
       );
       changes.add(change);
       operations.add(_generateRenameColumnOperation(newModel, r, change));
@@ -721,6 +845,8 @@ class SchemaDiffer {
         'ADD CONSTRAINT ${_quoteIdent(check.name)} CHECK (${check.expression});',
       );
     }
+    final indexes = emitIndexSql(model);
+    if (indexes.isNotEmpty) buf.write('\n$indexes');
     final upSql = buf.toString();
     final downSql = 'DROP TABLE IF EXISTS ${_quoteIdent(model.tableName)};';
 
@@ -1168,11 +1294,20 @@ class SchemaDiffer {
   // Note: column-level CHECK expression changes are handled via
   // `_compareChecks` using synthesized constraint names.
 
-  /// Generate migration file from diff
+  /// Generate migration file from diff.
+  ///
+  /// Throws [DestructiveMigrationException], writing nothing, when the diff
+  /// would lose data (see [SchemaDiff.destructiveChanges]) unless
+  /// [allowDestructive] is true. Destructive steps and guessed renames are
+  /// marked with a comment in the generated SQL either way.
   Future<void> generateMigrationFile(
-      SchemaDiff diff, String outputPath, String migrationName) async {
+      SchemaDiff diff, String outputPath, String migrationName,
+      {bool allowDestructive = false}) async {
     if (diff.isEmpty) {
       throw ArgumentError('No changes to generate migration for');
+    }
+    if (diff.destructiveChanges.isNotEmpty && !allowDestructive) {
+      throw DestructiveMigrationException(diff.destructiveChanges);
     }
 
     final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -1191,6 +1326,15 @@ class SchemaDiffer {
     upBuffer.writeln();
 
     for (final operation in diff.operations) {
+      if (diff.destructiveChanges.contains(operation.change)) {
+        upBuffer.writeln('-- DESTRUCTIVE: this step can lose data');
+      }
+      if (operation.change.metadata?['guessed'] == true) {
+        upBuffer.writeln('-- GUESSED RENAME: a column was dropped and a '
+            'compatible one added, so this');
+        upBuffer.writeln('-- assumes it is the same column. If not, replace '
+            'it with a DROP COLUMN and ADD COLUMN.');
+      }
       upBuffer.writeln('-- ${operation.change}');
       upBuffer.writeln(operation.upSql);
       upBuffer.writeln();
@@ -1222,6 +1366,12 @@ class SchemaDiffer {
     print('Generated migration files:');
     print('   Up:   ${upFile.path}');
     print('   Down: ${downFile.path}');
+    for (final c in diff.destructiveChanges) {
+      print('   WARNING (destructive): $c');
+    }
+    for (final c in diff.guessedRenames) {
+      print('   WARNING (guessed rename, check it): $c');
+    }
   }
 }
 

@@ -7,6 +7,7 @@
 //   dart run gisila_orm:migrate down   [--dir <path>] [--config <yaml>] [--steps N]
 //   dart run gisila_orm:migrate status [--dir <path>] [--config <yaml>]
 //   dart run gisila_orm:migrate diff   --old <path> --new <path> --name <slug> [--out <dir>]
+//                                      [--allow-destructive]
 //
 // Connection: prefers DATABASE_URL (and optional database.yaml overlays) via
 // DatabaseConfig.fromEnvironment — required for file-less deploys (Gisila Panel).
@@ -27,10 +28,12 @@ Future<void> main(List<String> args) async {
   }
 
   final command = args.first;
-  final flags = _parseFlags(args.sublist(1));
+  final allowDestructive = args.contains('--allow-destructive');
+  final flags = _parseFlags(
+      args.sublist(1).where((a) => a != '--allow-destructive').toList());
 
   if (command == 'diff') {
-    await _runDiff(flags);
+    await _runDiff(flags, allowDestructive: allowDestructive);
     return;
   }
 
@@ -90,11 +93,14 @@ Future<void> main(List<String> args) async {
       case 'status':
         final applied = await manager.listApplied();
         final appliedIds = applied.map((a) => a.id).toSet();
+        final edited = (await manager.editedSinceApplied(discovered)).toSet();
         stdout.writeln(
             'Discovered: ${discovered.length}, applied: ${applied.length}');
         for (final m in discovered) {
           final mark = appliedIds.contains(m.id) ? '[x]' : '[ ]';
-          stdout.writeln('  $mark ${m.id}');
+          final note =
+              edited.contains(m.id) ? '  (edited after it was applied)' : '';
+          stdout.writeln('  $mark ${m.id}$note');
         }
         break;
 
@@ -102,6 +108,9 @@ Future<void> main(List<String> args) async {
         _usage();
         exit(64);
     }
+  } on MigrationChecksumException catch (e) {
+    stderr.writeln(e);
+    exitCode = 1;
   } finally {
     await db.close();
   }
@@ -123,11 +132,13 @@ void _usage() {
   stdout.writeln(
     'gisila_orm migrate <up|down|status|diff> '
     '[--dir <path>] [--config <yaml>] [--steps N] '
-    '[--old <path>] [--new <path>] [--name <slug>] [--out <path>]',
+    '[--old <path>] [--new <path>] [--name <slug>] [--out <path>] '
+    '[--allow-destructive]',
   );
 }
 
-Future<void> _runDiff(Map<String, String> flags) async {
+Future<void> _runDiff(Map<String, String> flags,
+    {required bool allowDestructive}) async {
   final oldPath = flags['old'];
   final newPath = flags['new'];
   final name = flags['name'];
@@ -152,5 +163,11 @@ Future<void> _runDiff(Map<String, String> flags) async {
     return;
   }
 
-  await differ.generateMigrationFile(diff, outDir, name);
+  try {
+    await differ.generateMigrationFile(diff, outDir, name,
+        allowDestructive: allowDestructive);
+  } on DestructiveMigrationException catch (e) {
+    stderr.writeln(e);
+    exit(1);
+  }
 }

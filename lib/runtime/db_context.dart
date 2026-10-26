@@ -7,7 +7,9 @@
 ///     call (used for one-shot statements outside a transaction), or
 ///   * [TxDbContext] - wraps a single `TxSession` for the duration of
 ///     a transaction so every statement inside `db.transaction(...)`
-///     runs against the same session.
+///     runs against the same session, or
+///   * [ConnectionDbContext] - one connection borrowed from the pool by
+///     `db.withConnection(...)`, for session state such as advisory locks.
 ///
 /// Both implementations route every error through
 /// [PostgresErrorMapper] so callers always see `PostgresException`s
@@ -115,4 +117,51 @@ class TxDbContext implements DbContext {
 
   /// Roll back the in-flight transaction explicitly.
   Future<void> rollback() => _session.rollback();
+}
+
+/// A [DbContext] pinned to one pooled connection for the duration of
+/// `Database.withConnection(...)`. Session-level state (advisory locks,
+/// `SET` without `LOCAL`) persists across calls, and [transaction] runs
+/// on the same connection.
+class ConnectionDbContext implements DbContext {
+  ConnectionDbContext(this._connection);
+
+  final Connection _connection;
+
+  @override
+  Future<Result> execute(
+    String sql, {
+    List<Object?> parameters = const [],
+  }) async {
+    try {
+      return await _connection.execute(
+        sql,
+        parameters: parameters.isEmpty ? null : parameters,
+        queryMode: QueryMode.extended,
+      );
+    } on ServerException catch (e) {
+      throw PostgresErrorMapper.fromServerException(e, query: sql);
+    }
+  }
+
+  @override
+  Stream<ResultRow> stream(
+    String sql, {
+    List<Object?> parameters = const [],
+  }) async* {
+    final result = await execute(sql, parameters: parameters);
+    for (final row in result) {
+      yield row;
+    }
+  }
+
+  /// Run [body] in a transaction on this connection.
+  Future<R> transaction<R>(Future<R> Function(TxDbContext tx) body) async {
+    try {
+      return await _connection
+          .runTx<R>((session) => body(TxDbContext(session)));
+    } on ServerException catch (e) {
+      throw PostgresErrorMapper.fromServerException(e);
+    }
+  }
 }

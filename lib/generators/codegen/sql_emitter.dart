@@ -303,6 +303,15 @@ String _physicalIndexColumn(String logicalName, ModelDefinition model) {
   return col.physicalColumnName;
 }
 
+/// `CREATE INDEX` statements for [model]: its `is_index` columns and its
+/// `indexes:` block. Shared with the migration differ for new tables.
+String emitIndexSql(ModelDefinition model) => _indexSql(model);
+
+/// `CREATE TABLE` for the junction table of many-to-many [rel]. Shared
+/// with the migration differ.
+String emitJunctionTableSql(RelationshipInfo rel, SchemaDefinition schema) =>
+    _junctionTableSql(rel, schema);
+
 String _junctionTableSql(RelationshipInfo rel, SchemaDefinition schema) {
   final left = _resolvedTable(rel.fromModel, schema);
   final right = _resolvedTable(rel.toModel, schema);
