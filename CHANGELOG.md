@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Breaking: `decimal` columns are `String` in generated models (was
+  `double`, which rounded money); Postgres returns `numeric` as exact text
+  and takes it back the same way. `json` columns are `Object` (was
+  `Map<String, dynamic>`), so arrays, strings, numbers and booleans work;
+  writing a JSON array used to fail and reading one crashed. Generated
+  `toRow()` encodes json values with the new `encodeJsonColumn`; `toJson()`
+  returns them as values. Regenerate models after upgrading.
+- Fix: generated `toJson()` returns `DateTime` columns as ISO-8601 UTC
+  strings, so `jsonEncode(model.toJson())` works (it threw); `fromJson`
+  reads them back. `toRow()` is unchanged.
+- `TxDbContext.savepoint(body)`: a failure inside rolls back only `body`'s
+  work. `db.transaction(...)` (and `ConnectionDbContext.transaction`)
+  called inside a running transaction on the same pool or connection is a
+  savepoint of it instead of a second, independent transaction on another
+  connection (which was not atomic and deadlocked a one-connection pool).
+- `stream()` reads `SELECT`/`VALUES`/`TABLE` queries through a server-side
+  cursor (`cursorBatchSize` = 500 rows per fetch) instead of loading the
+  whole result first. Outside a transaction it holds one connection, in a
+  read transaction, until the stream ends or is cancelled.
+- Requires `postgres` ^3.5.13: 3.5.12 fixed recovering a transaction after
+  `ROLLBACK TO SAVEPOINT`, and 3.5.13 made pools honour `securityContext`.
+  `sslrootcert` CAs are no longer added to the process-wide
+  `SecurityContext.defaultContext`; each connection trusts only its own.
 - Breaking: `update(...)` and `delete()` without a WHERE clause throw
   `InvalidQueryBuilderException` instead of touching every row. Call
   `.all()` on the builder when you mean the whole table.

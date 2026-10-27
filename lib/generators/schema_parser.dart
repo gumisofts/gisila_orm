@@ -110,7 +110,8 @@ class ArrayConfig {
       case ColumnType.timestamp:
         return 'DateTime';
       case ColumnType.decimal:
-        return 'double';
+        // Exact: numeric comes back as text, and a double would round it.
+        return 'String';
       default:
         return 'Object';
     }
@@ -280,9 +281,12 @@ class ColumnDefinition {
       case ColumnType.timestamp:
         return 'DateTime';
       case ColumnType.decimal:
-        return 'double';
+        // Exact: numeric comes back as text, and a double would round it
+        // (money). Parse it with package:decimal or similar where needed.
+        return 'String';
       case ColumnType.json:
-        return 'Map<String, dynamic>';
+        // Any JSON value: an object, but also an array, string or number.
+        return 'Object';
       case ColumnType.vector:
         return 'Vector';
       case ColumnType.array:

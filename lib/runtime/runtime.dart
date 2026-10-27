@@ -2,4 +2,5 @@
 library gisila.runtime;
 
 export 'db_context.dart';
+export 'json_column.dart';
 export 'preloadable.dart';

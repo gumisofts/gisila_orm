@@ -132,26 +132,14 @@ class Database {
     return pool;
   }
 
-  /// CA files already added to [SecurityContext.defaultContext].
-  static final Set<String> _trustedCaFiles = {};
-
   /// A TLS context trusting only [DatabaseConnection.sslRootCert], or null
   /// to use the system trust store.
-  ///
-  /// `package:postgres` (3.5.x) drops a pool's `securityContext` when it
-  /// opens connections, so the CA is also added to the process-wide
-  /// default context, which TLS falls back to. The effect is that the CA
-  /// is trusted in addition to the system roots, for this whole process.
   static SecurityContext? _securityContextFor(DatabaseConnection c) {
     final caFile = c.sslRootCert;
     if (caFile == null) return null;
     try {
-      final context = SecurityContext(withTrustedRoots: false)
+      return SecurityContext(withTrustedRoots: false)
         ..setTrustedCertificates(caFile);
-      if (_trustedCaFiles.add(caFile)) {
-        SecurityContext.defaultContext.setTrustedCertificates(caFile);
-      }
-      return context;
     } on Object catch (e) {
       throw DatabaseConfigurationException(
           'Cannot load sslrootcert "$caFile" for connection "${c.name}": $e');
@@ -219,20 +207,17 @@ class Database {
   /// is passed to [body] and is the only connection that should be
   /// used inside the closure. If [body] throws, the transaction is
   /// rolled back; otherwise it is committed.
+  ///
+  /// Called inside another transaction on the same connection name, it
+  /// runs [body] in a savepoint of that transaction ([settings] then do
+  /// not apply): a throw rolls back only [body]'s work.
   Future<R> transaction<R>(
     Future<R> Function(TxDbContext tx) body, {
     String? connectionName,
     TransactionSettings? settings,
   }) async {
     final pool = _poolFor(connectionName ?? _defaultName);
-    try {
-      return await pool.runTx<R>(
-        (session) => body(TxDbContext(session)),
-        settings: settings,
-      );
-    } on ServerException catch (e) {
-      throw PostgresErrorMapper.fromServerException(e);
-    }
+    return runTransaction(pool, pool.runTx, body, settings: settings);
   }
 
   /// Run [body] on one connection borrowed from the pool for its whole
