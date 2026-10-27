@@ -31,7 +31,11 @@ import 'package:postgres/postgres.dart';
 /// await db.close();
 /// ```
 class Database {
-  Database._(this._config, this._pools, this._defaultName, this._onOpen);
+  Database._(this._config, this._pools, this._defaultName, this._onOpen,
+      this._onQuery);
+
+  /// Sees every statement run through this database (see [QueryObserver]).
+  final QueryObserver? _onQuery;
 
   final DatabaseConfig _config;
   final Map<String, Pool<Connection>> _pools;
@@ -49,11 +53,16 @@ class Database {
   /// connection. This is the right place to apply session-level
   /// configuration like `SET search_path` that must survive a pool
   /// dropping a connection (e.g. after a transaction rolls back).
+  ///
+  /// Pass [onQuery] to observe every statement (SQL, parameters, duration,
+  /// error), e.g. `onQuery: slowQueryLogger(Duration(milliseconds: 200),
+  /// print)`.
   static Future<Database> connect(
     DatabaseConfig config, {
     String? defaultConnectionName,
     bool eager = false,
     Future<void> Function(Connection connection)? onOpen,
+    QueryObserver? onQuery,
   }) async {
     final defaultName = defaultConnectionName ?? config.defaultConnection.name;
     if (!config.hasConnection(defaultName)) {
@@ -63,7 +72,7 @@ class Database {
     }
 
     final pools = <String, Pool<Connection>>{};
-    final db = Database._(config, pools, defaultName, onOpen);
+    final db = Database._(config, pools, defaultName, onOpen, onQuery);
 
     for (final name in config.connectionNames) {
       final c = config.getConnection(name)!;
@@ -132,26 +141,14 @@ class Database {
     return pool;
   }
 
-  /// CA files already added to [SecurityContext.defaultContext].
-  static final Set<String> _trustedCaFiles = {};
-
   /// A TLS context trusting only [DatabaseConnection.sslRootCert], or null
   /// to use the system trust store.
-  ///
-  /// `package:postgres` (3.5.x) drops a pool's `securityContext` when it
-  /// opens connections, so the CA is also added to the process-wide
-  /// default context, which TLS falls back to. The effect is that the CA
-  /// is trusted in addition to the system roots, for this whole process.
   static SecurityContext? _securityContextFor(DatabaseConnection c) {
     final caFile = c.sslRootCert;
     if (caFile == null) return null;
     try {
-      final context = SecurityContext(withTrustedRoots: false)
+      return SecurityContext(withTrustedRoots: false)
         ..setTrustedCertificates(caFile);
-      if (_trustedCaFiles.add(caFile)) {
-        SecurityContext.defaultContext.setTrustedCertificates(caFile);
-      }
-      return context;
     } on Object catch (e) {
       throw DatabaseConfigurationException(
           'Cannot load sslrootcert "$caFile" for connection "${c.name}": $e');
@@ -202,7 +199,8 @@ class Database {
   /// statements outside a transaction; each call acquires a connection
   /// from the pool independently.
   DbContext context([String? connectionName]) =>
-      PoolDbContext(_poolFor(connectionName ?? _defaultName));
+      PoolDbContext(_poolFor(connectionName ?? _defaultName),
+          observer: _onQuery);
 
   /// One-shot statement execution. Acquires a connection from the
   /// default pool, runs the statement, returns the result. For
@@ -219,20 +217,18 @@ class Database {
   /// is passed to [body] and is the only connection that should be
   /// used inside the closure. If [body] throws, the transaction is
   /// rolled back; otherwise it is committed.
+  ///
+  /// Called inside another transaction on the same connection name, it
+  /// runs [body] in a savepoint of that transaction ([settings] then do
+  /// not apply): a throw rolls back only [body]'s work.
   Future<R> transaction<R>(
     Future<R> Function(TxDbContext tx) body, {
     String? connectionName,
     TransactionSettings? settings,
   }) async {
     final pool = _poolFor(connectionName ?? _defaultName);
-    try {
-      return await pool.runTx<R>(
-        (session) => body(TxDbContext(session)),
-        settings: settings,
-      );
-    } on ServerException catch (e) {
-      throw PostgresErrorMapper.fromServerException(e);
-    }
+    return runTransaction(pool, pool.runTx, body,
+        settings: settings, observer: _onQuery);
   }
 
   /// Run [body] on one connection borrowed from the pool for its whole
@@ -244,7 +240,8 @@ class Database {
     String? connectionName,
   }) {
     final pool = _poolFor(connectionName ?? _defaultName);
-    return pool.withConnection((conn) => body(ConnectionDbContext(conn)));
+    return pool.withConnection(
+        (conn) => body(ConnectionDbContext(conn, observer: _onQuery)));
   }
 
   /// Cheap liveness check (`SELECT 1`).

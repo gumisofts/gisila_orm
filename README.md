@@ -301,8 +301,8 @@ All column types map to their canonical PostgreSQL type and a Dart type:
 | `boolean` | `BOOLEAN` | `bool` |
 | `date` | `DATE` | `DateTime` |
 | `timestamp` | `TIMESTAMP WITH TIME ZONE` | `DateTime` |
-| `decimal` | `DECIMAL` | `double` |
-| `json` | `JSONB` | `Map<String, dynamic>` |
+| `decimal` | `DECIMAL` | `String` (exact; parse with e.g. `package:decimal`) |
+| `json` | `JSONB` | `Object` (any JSON value: map, list, string, number, bool) |
 | `uuid` | `UUID` | `String` |
 | `vector` | `VECTOR(n)` (requires pgvector) | `Vector` |
 | `varchar[]`, `integer[]`, … | element type + `[]` | `List<T>` |
@@ -713,7 +713,7 @@ extension TeamRoleGisila on TeamRole {
 - `factory Foo.fromRow(Map<String, dynamic> row)` — used by the hydrator.
 - `Map<String, dynamic> toRow()` — used by inserts/updates and the preloader
   (enums encode via `.sqlValue`; geometrics via `.toSqlLiteral()`).
-- `factory Foo.fromJson` / `Map<String, dynamic> toJson()` — aliases for `fromRow` / `toRow`.
+- `factory Foo.fromJson` / `Map<String, dynamic> toJson()` — like `fromRow` / `toRow`, but `toJson` is safe for `jsonEncode` (dates as ISO-8601 UTC, json columns as their value).
 - `Foo copyWith({...})`.
 - `List<String> validate()` — model-side checks for `allow_blank: false` string columns.
 - `static final Relation<Foo, X> someRelation` — one per declared/inverse relation.
@@ -806,9 +806,8 @@ password also works unencoded. `sslmode` accepts every libpq value:
 | `verify-ca`, `verify-full` | TLS with certificate and host name checked |
 
 Add `sslrootcert=/path/ca.pem` to trust a private CA (as with most managed
-Postgres). Because of a `package:postgres` limitation, that CA is trusted
-process-wide, alongside the system roots. Any other `sslmode` value is an
-error. In YAML, use `ssl_mode:` and `ssl_root_cert:` (or the older
+Postgres). That connection then trusts only that CA, not the system roots.
+Any other `sslmode` value is an error. In YAML, use `ssl_mode:` and `ssl_root_cert:` (or the older
 `ssl: true`, which means `require`).
 
 ### Programmatically
@@ -882,7 +881,7 @@ immutable `CompiledSql` only when you invoke a terminal operation.
 | `.first(db)` | `Future<T?>` | first row or `null` |
 | `.count(db)` | `Future<int>` | `SELECT COUNT(*)` honoring WHERE/JOINs |
 | `.exists(db)` | `Future<bool>` | `SELECT EXISTS(...)` |
-| `.stream(db)` | `Stream<T>` | yields hydrated rows lazily |
+| `.stream(db)` | `Stream<T>` | yields hydrated rows through a server-side cursor, 500 at a time; holds one connection in a transaction until done or cancelled |
 
 ### Predicates (`where`)
 
@@ -973,6 +972,14 @@ Query<User>(UserTable.metadata)
 
 For SQL the AST can't model, drop down to `RawSql<T>(sql, params)` inside a
 predicate, or pass a `connection.execute(...)` directly via the `DbContext`.
+Parameters are `$1`, `$2`, ... counted within the fragment (they are
+renumbered to fit the statement), so `?` stays available for the JSONB
+operators:
+
+```dart
+Query<Post>(PostTable.metadata)
+    .where(RawSql<bool>("meta ? 'pinned' OR score > \$1", [10]));
+```
 
 ---
 
@@ -1002,6 +1009,22 @@ await Query<User>(UserTable.metadata)
     .run(db);
 ```
 
+### Upsert
+
+```dart
+// Insert, or update the existing row with the same email.
+final user = await Query<User>(UserTable.metadata)
+    .insert({'email': 'a@b.com', 'name': 'Ada'})
+    .onConflictDoUpdate(['email']) // or update: ['name']
+    .one(db);
+
+// Insert unless a row with this email exists.
+await Query<User>(UserTable.metadata)
+    .insert({'email': 'a@b.com', 'name': 'Ada'})
+    .onConflictDoNothing(['email'])
+    .run(db);
+```
+
 ### Update
 
 ```dart
@@ -1022,7 +1045,28 @@ await Query<User>(UserTable.metadata)
     .run(db);
 ```
 
+An update or delete with no WHERE clause throws rather than touching every
+row. When you do mean the whole table, say so with `.all()`:
+
+```dart
+await Query<Session>(SessionTable.metadata).delete().all().run(db);
+```
+
 ---
+
+## Keyset pagination and query logging
+
+```dart
+// Page through by id: each page costs the same however deep it is.
+final page = await Query<Post>(PostTable.metadata)
+    .after(PostTable.id, lastSeenId) // null for the first page
+    .limit(50)
+    .all(db.context());
+
+// See every statement; here, log the slow and failed ones.
+final db = await Database.connect(config,
+    onQuery: slowQueryLogger(const Duration(milliseconds: 200), print));
+```
 
 ## Transactions
 
@@ -1044,11 +1088,31 @@ await db.transaction((tx) async {
 });
 ```
 
+Savepoints let part of a transaction fail without losing the rest:
+
+```dart
+await db.transaction((tx) async {
+  await Query<Order>(OrderTable.metadata).insert({...}).run(tx);
+  try {
+    await tx.savepoint((sp) async {
+      // Rolled back on its own if this throws.
+      await Query<Coupon>(CouponTable.metadata).insert({...}).run(sp);
+    });
+  } on PostgresUniqueViolationException {
+    // The order insert is still there.
+  }
+});
+```
+
+A `db.transaction(...)` called while another transaction on the same
+connection name is running (from code the outer body calls) becomes a
+savepoint of it, so it is atomic with the outer one and does not take a
+second connection.
+
 Explicit rollback (rare):
 
 ```dart
 await db.transaction((tx) async {
-  await tx.execute('SAVEPOINT sp');
   // ...
   await tx.rollback();
 });

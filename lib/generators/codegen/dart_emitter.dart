@@ -131,7 +131,19 @@ String _emitModelClass(ModelDefinition model, SchemaDefinition schema) {
     ..writeln()
     ..writeln(
         '  Map<String, dynamic> toJson({List<String> exclude = const [], List<String> only = const []}) {')
-    ..writeln('    final row = toRow();')
+    // JSON-safe values: DateTime as ISO-8601 UTC (fromJson parses it back),
+    // so jsonEncode(model.toJson()) works. toRow() keeps DateTime for the
+    // driver.
+    ..writeln('    final row = {')
+    ..writeln('      ...toRow().map((k, v) =>')
+    ..writeln(
+        '          MapEntry(k, v is DateTime ? v.toUtc().toIso8601String() : v)),')
+    // json columns: the value itself, not the text toRow() binds.
+    ..writeAll([
+      for (final c in fields.where((c) => c.type == ColumnType.json))
+        "      '${c.physicalColumnName}': ${c.dartFieldName},\n"
+    ])
+    ..writeln('    };')
     ..writeln(
         '    if (only.isNotEmpty) return {for (final k in only) k: row[k]};')
     ..writeln('    if (exclude.isEmpty) return row;')
@@ -439,15 +451,13 @@ String _coerce(String expr, ColumnDefinition col,
       }
       return '$expr is DateTime ? $expr as DateTime : DateTime.parse($expr.toString())';
     case ColumnType.json:
-      if (nullable) {
-        return '$expr == null ? null : ($expr as Map).cast<String, dynamic>()';
-      }
-      return '($expr as Map).cast<String, dynamic>()';
+      // The driver decodes json/jsonb to the matching Dart value.
+      if (nullable) return '$expr as Object?';
+      return '$expr as Object';
     case ColumnType.decimal:
-      if (nullable) {
-        return '$expr == null ? null : ($expr is num ? ($expr as num).toDouble() : double.parse($expr.toString()))';
-      }
-      return '$expr is num ? ($expr as num).toDouble() : double.parse($expr.toString())';
+      // numeric arrives as exact text; a num (from fromJson) is accepted too.
+      if (nullable) return '$expr?.toString()';
+      return '$expr.toString()';
     case ColumnType.vector:
       // pgvector usually comes back as text (`[v1,v2,...]`); be lenient
       // and also accept lists of numbers in case the driver decodes it.
@@ -563,6 +573,8 @@ String _encode(String fieldName, ColumnDefinition col) {
     case ColumnType.timestamp:
     case ColumnType.date:
       return fieldName; // postgres driver handles DateTime natively.
+    case ColumnType.json:
+      return 'encodeJsonColumn($fieldName)';
     default:
       return fieldName;
   }

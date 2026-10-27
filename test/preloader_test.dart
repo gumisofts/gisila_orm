@@ -165,6 +165,30 @@ void main() {
       expect(users[2].preloaded<List<TestPost>>('posts')!, isEmpty);
     });
 
+    test('splits more keys than Postgres can bind into batches', () async {
+      final users = [
+        for (var i = 1; i <= Preloader.maxKeysPerQuery * 2 + 5; i++)
+          TestUser(id: i, email: '$i@x.com'),
+      ];
+      final mock = MockDbContext(
+          onExecute: (sql, params) => _resultFor([
+                'id',
+                'user_id',
+                'title'
+              ], [
+                for (final k in params) [k, k, 't$k'],
+              ]));
+
+      await const Preloader()
+          .applyTo(users.cast<Object>(), [TestUser.posts], mock);
+
+      expect(mock.params.map((p) => p.length),
+          [Preloader.maxKeysPerQuery, Preloader.maxKeysPerQuery, 5]);
+      expect(mock.params.expand((p) => p).toSet().length, users.length);
+      expect(users.last.preloaded<List<TestPost>>('posts')!.single.userId,
+          users.last.id);
+    });
+
     test('nested preload .then() resolves in N+1 levels of queries', () async {
       final users = [
         TestUser(id: 1, email: 'a@x.com'),

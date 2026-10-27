@@ -134,6 +134,63 @@ void main() {
     });
   });
 
+  group('upsert and keyset (ORM-17)', () {
+    test('ON CONFLICT DO NOTHING, with or without a target', () {
+      expect(
+          Query(users())
+              .insert({'email': 'a'})
+              .onConflictDoNothing()
+              .compile()
+              .sql,
+          contains(' ON CONFLICT DO NOTHING RETURNING *'));
+      expect(
+          Query(users())
+              .insert({'email': 'a'})
+              .onConflictDoNothing(['email'])
+              .compile()
+              .sql,
+          contains(' ON CONFLICT ("email") DO NOTHING'));
+    });
+
+    test('DO UPDATE sets every inserted column but the target by default', () {
+      final c = Query(users()).insert({
+        'email': 'a',
+        'isActive': true,
+        'age': 3
+      }).onConflictDoUpdate(['email']).compile();
+      expect(
+          c.sql,
+          endsWith(' ON CONFLICT ("email") DO UPDATE SET '
+              '"is_active" = EXCLUDED."is_active", "age" = EXCLUDED."age" '
+              'RETURNING *'));
+    });
+
+    test('DO UPDATE with an explicit column list', () {
+      expect(
+          Query(users())
+              .insert({'email': 'a', 'age': 3, 'is_active': true})
+              .onConflictDoUpdate(['email'], update: ['age'])
+              .compile()
+              .sql,
+          contains('DO UPDATE SET "age" = EXCLUDED."age" RETURNING'));
+    });
+
+    test('DO UPDATE needs a target', () {
+      expect(() => Query(users()).insert({'a': 1}).onConflictDoUpdate([]),
+          throwsArgumentError);
+    });
+
+    test('after() seeks past the last key and orders by it', () {
+      final first = Query(users()).after(id, null).limit(2).compile();
+      expect(first.sql, endsWith('ORDER BY "users"."id" ASC LIMIT 2'));
+      expect(first.sql, isNot(contains('WHERE')));
+      final next = Query(users()).after(id, 10, descending: true).compile();
+      expect(next.sql, contains('WHERE ("users"."id" < \$1)'));
+      expect(next.sql, contains('ORDER BY "users"."id" DESC'));
+      expect(next.params, [10]);
+    });
+  });
+
   group('INSERT', () {
     test('emits column list, values, and RETURNING * by default', () {
       final c = Query(users()).insert({
@@ -181,6 +238,59 @@ void main() {
     });
   });
 
+  group('without WHERE', () {
+    test('UPDATE and DELETE refuse to touch every row by accident', () {
+      expect(() => Query(users()).update({'email': 'x'}).compile(),
+          throwsA(isA<InvalidQueryBuilderException>()));
+      expect(() => Query(users()).delete().compile(),
+          throwsA(isA<InvalidQueryBuilderException>()));
+    });
+
+    test('.all() opts in', () {
+      expect(Query(users()).update({'email': 'x'}).all().compile().sql,
+          'UPDATE "users" SET "email" = \$1 RETURNING *');
+      expect(Query(users()).delete().all().compile().sql,
+          'DELETE FROM "users" RETURNING *');
+    });
+
+    test('a WHERE added on the mutation builder counts', () {
+      expect(Query(users()).delete().where(id.eq(1)).compile().sql,
+          'DELETE FROM "users" WHERE ("users"."id" = \$1) RETURNING *');
+    });
+  });
+
+  group('RawSql', () {
+    test(r'renumbers $n to the statement and leaves ? alone', () {
+      final c = Query(users())
+          .where(id.eq(5))
+          .where(RawSql<bool>(
+              "data ? 'tags' AND score > \$2 AND rank < \$1", [3, 10]))
+          .compile();
+      expect(c.sql,
+          contains("AND (data ? 'tags' AND score > \$3 AND rank < \$2))"));
+      expect(c.params, [5, 3, 10]);
+    });
+
+    test('keeps an OR inside the fragment', () {
+      final c = Query(users())
+          .where(id.eq(5))
+          .where(const RawSql<bool>('a OR b'))
+          .compile();
+      expect(c.sql, endsWith('WHERE (("users"."id" = \$1) AND (a OR b))'));
+    });
+
+    test('rejects placeholders that do not match the parameters', () {
+      Object compile(RawSql<bool> raw) => Query(users()).where(raw).compile();
+      expect(() => compile(const RawSql<bool>('a = \$1')), throwsArgumentError);
+      expect(() => compile(const RawSql<bool>('a = \$2', [1])),
+          throwsArgumentError);
+      expect(() => compile(const RawSql<bool>('a = \$1', [1, 2])),
+          throwsArgumentError);
+      expect(
+          () => compile(const RawSql<bool>('a = ?', [1])), throwsArgumentError);
+    });
+  });
+
   group('DELETE', () {
     test('emits WHERE and RETURNING by default', () {
       final c = Query(users()).where(id.eq(1)).delete().compile();
@@ -220,7 +330,7 @@ void main() {
       final ins = Query(users()).insert({'x") values (1); --': 1}).compile();
       expect(
           ins.sql, startsWith('INSERT INTO "users" ("x"") values (1); --")'));
-      final upd = Query(users()).update({'a" = 1, "b': 2}).compile();
+      final upd = Query(users()).update({'a" = 1, "b': 2}).all().compile();
       expect(upd.sql, startsWith('UPDATE "users" SET "a"" = 1, ""b" = \$1'));
     });
 

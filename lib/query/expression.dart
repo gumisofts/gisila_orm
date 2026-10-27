@@ -275,6 +275,15 @@ class NullCheck extends Expr<bool> {
 
 /// Escape hatch: a hand-written SQL fragment with optional bound
 /// parameters, used for cases the AST can't model directly.
+///
+/// Refer to [params] as `$1`, `$2`, ... counted within this fragment; they
+/// are renumbered to fit the surrounding statement. Every parameter must be
+/// referenced and no placeholder may go past [params]. A `?` is plain SQL
+/// (the JSONB key-exists operator, for one), not a placeholder.
+///
+/// ```dart
+/// RawSql<bool>("data ? 'tags' AND score > \$1", [10])
+/// ```
 class RawSql<T> extends Expr<T> {
   final String sql;
   final List<Object?> params;

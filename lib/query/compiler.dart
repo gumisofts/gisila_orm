@@ -144,14 +144,29 @@ class SqlCompiler implements ExprVisitor<String> {
 
   @override
   String visitRawSql(RawSql expr) {
-    // Bind parameters via this compiler so $n indices stay correct, then
-    // splice them back into the raw SQL string.
-    if (expr.params.isEmpty) return expr.sql;
-    final placeholders = expr.params.map(bind).toList();
-    var i = 0;
-    return expr.sql.replaceAllMapped(
-      RegExp(r'\?'),
-      (_) => placeholders[i++],
+    // `$n` counts within the fragment; bind through this compiler so it
+    // lands on the right index of the whole statement.
+    final placeholder = RegExp(r'\$(\d+)');
+    final used = <int>{};
+    for (final m in placeholder.allMatches(expr.sql)) {
+      used.add(int.parse(m.group(1)!));
+    }
+    final n = expr.params.length;
+    if (used.any((i) => i < 1 || i > n) || used.length != n) {
+      throw ArgumentError.value(
+        expr.sql,
+        'RawSql',
+        'uses placeholders ${(used.toList()..sort()).map((i) => '\$$i')} '
+            'for $n parameter(s); reference each of \$1..\$$n',
+      );
+    }
+    if (expr.sql.trim().isEmpty) return expr.sql;
+    final bound = expr.params.map(bind).toList();
+    // Parenthesised so `a OR b` stays one operand next to other predicates.
+    final sql = expr.sql.replaceAllMapped(
+      placeholder,
+      (m) => bound[int.parse(m.group(1)!) - 1],
     );
+    return '($sql)';
   }
 }

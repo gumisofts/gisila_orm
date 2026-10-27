@@ -185,7 +185,7 @@ Future<bool> isTestDbAvailable({int port = 5454}) async {
   try {
     final s = await Socket.connect(_testEndpoint.host, port,
         timeout: const Duration(milliseconds: 250));
-    await s.close();
+    s.destroy();
     return true;
   } catch (_) {
     return false;

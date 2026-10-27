@@ -107,6 +107,25 @@ class Query<T> {
     return this;
   }
 
+  /// Keyset ("seek") pagination: rows after [value] in [column] order. Pass
+  /// the last row's value from the previous page (null for the first page),
+  /// then `.limit(n)`. Unlike [offset], a page costs the same however deep
+  /// it is, and rows inserted meanwhile don't shift it. [column] must be
+  /// unique (or end a unique ordering), e.g. the primary key.
+  ///
+  /// ```dart
+  /// final page = await Query<Post>(PostTable.metadata)
+  ///     .after(PostTable.id, lastSeenId)
+  ///     .limit(50)
+  ///     .all(db);
+  /// ```
+  Query<T> after<V>(ColumnRef<V> column, V? value, {bool descending = false}) {
+    if (value != null) {
+      where(descending ? column.lt(value) : column.gt(value));
+    }
+    return orderBy(column, desc: descending);
+  }
+
   Query<T> offset(int n) {
     _offset = n;
     return this;
@@ -303,12 +322,14 @@ class Query<T> {
       InsertQuery<T>._(_meta, values);
 
   /// Begin an `UPDATE _table_ SET ... [WHERE ...] RETURNING *`.
-  /// The WHERE clause from this `Query<T>` is reused.
+  /// The WHERE clause from this `Query<T>` is reused. Without one, the
+  /// update refuses to compile unless you call [UpdateQuery.all].
   UpdateQuery<T> update(Map<String, Object?> values) =>
       UpdateQuery<T>._(_meta, values, _where);
 
   /// Begin a `DELETE FROM _table_ [WHERE ...] RETURNING *`. Reuses the
-  /// WHERE clause from this query.
+  /// WHERE clause from this query. Without one, the delete refuses to
+  /// compile unless you call [DeleteQuery.all].
   DeleteQuery<T> delete() => DeleteQuery<T>._(_meta, _where);
 }
 
@@ -322,7 +343,7 @@ class InsertQuery<T> {
   final TableMeta<T> _meta;
   final List<Map<String, Object?>> _rows;
   bool _returning = true;
-  Expr<bool>? _onConflictDoNothing;
+  _OnConflict? _onConflict;
 
   InsertQuery._(this._meta, Map<String, Object?> first)
       : _rows = [Map.of(first)];
@@ -339,10 +360,35 @@ class InsertQuery<T> {
     return this;
   }
 
-  /// `ON CONFLICT DO NOTHING`. The optional [target] is a SQL fragment
-  /// like `(email)` describing the conflict target.
-  InsertQuery<T> onConflictDoNothing() {
-    _onConflictDoNothing = const RawSql<bool>('');
+  /// `ON CONFLICT [(target)] DO NOTHING`: skip rows that would violate a
+  /// unique constraint. With [target] (column names), only a conflict on
+  /// that unique index or constraint is skipped.
+  InsertQuery<T> onConflictDoNothing([List<String> target = const []]) {
+    _onConflict = _OnConflict(target, null);
+    return this;
+  }
+
+  /// Upsert: `ON CONFLICT (target) DO UPDATE SET col = EXCLUDED.col`.
+  ///
+  /// [target] names the columns of the unique index or constraint (e.g.
+  /// `['email']`). [update] lists the columns to overwrite from the row that
+  /// was refused; by default every inserted column except the target. With
+  /// `RETURNING *` (the default) the result holds the row as inserted or
+  /// as updated.
+  ///
+  /// ```dart
+  /// await Query<User>(UserTable.metadata)
+  ///     .insert({'email': 'a@b.c', 'name': 'Ada'})
+  ///     .onConflictDoUpdate(['email'])
+  ///     .one(db);
+  /// ```
+  InsertQuery<T> onConflictDoUpdate(List<String> target,
+      {List<String>? update}) {
+    if (target.isEmpty) {
+      throw ArgumentError.value(
+          target, 'target', 'DO UPDATE needs the conflict columns');
+    }
+    _onConflict = _OnConflict(target, update ?? const []);
     return this;
   }
 
@@ -369,8 +415,30 @@ class InsertQuery<T> {
     final buf = StringBuffer(
       'INSERT INTO ${_meta.tableName.safeTk} ($colsSql) VALUES $valuesSql',
     );
-    if (_onConflictDoNothing != null) {
-      buf.write(' ON CONFLICT DO NOTHING');
+    final conflict = _onConflict;
+    if (conflict != null) {
+      final target = conflict.target.map(_camelToSnake).toList();
+      buf.write(' ON CONFLICT');
+      if (target.isNotEmpty) {
+        buf.write(' (${target.map((t) => t.safeTk).join(', ')})');
+      }
+      final update = conflict.update;
+      if (update == null) {
+        buf.write(' DO NOTHING');
+      } else {
+        final cols = update.isNotEmpty
+            ? update.map(_camelToSnake).toList()
+            : columns.where((col) => !target.contains(col)).toList();
+        if (cols.isEmpty) {
+          // Nothing left to set: same outcome as skipping the row.
+          buf.write(' DO NOTHING');
+        } else {
+          buf.write(' DO UPDATE SET ');
+          buf.write(cols
+              .map((col) => '${col.safeTk} = EXCLUDED.${col.safeTk}')
+              .join(', '));
+        }
+      }
     }
     if (_returning) {
       buf.write(' RETURNING *');
@@ -411,11 +479,18 @@ class UpdateQuery<T> {
   final Map<String, Object?> _values;
   Expr<bool>? _where;
   bool _returning = true;
+  bool _all = false;
 
   UpdateQuery._(this._meta, this._values, Expr<bool>? where) : _where = where;
 
   UpdateQuery<T> where(Expr<bool> predicate) {
     _where = _where == null ? predicate : _where!.and(predicate);
+    return this;
+  }
+
+  /// Allow the update to run without a WHERE clause, touching every row.
+  UpdateQuery<T> all() {
+    _all = true;
     return this;
   }
 
@@ -430,6 +505,7 @@ class UpdateQuery<T> {
         'UpdateQuery<$T> has no SET values',
       );
     }
+    _requireWhere('UpdateQuery<$T>', _where, _all);
 
     final c = SqlCompiler();
     final normalized = _normalizeKeys(_values);
@@ -462,11 +538,18 @@ class DeleteQuery<T> {
   final TableMeta<T> _meta;
   Expr<bool>? _where;
   bool _returning = true;
+  bool _all = false;
 
   DeleteQuery._(this._meta, Expr<bool>? where) : _where = where;
 
   DeleteQuery<T> where(Expr<bool> predicate) {
     _where = _where == null ? predicate : _where!.and(predicate);
+    return this;
+  }
+
+  /// Allow the delete to run without a WHERE clause, removing every row.
+  DeleteQuery<T> all() {
+    _all = true;
     return this;
   }
 
@@ -476,6 +559,7 @@ class DeleteQuery<T> {
   }
 
   CompiledSql compile() {
+    _requireWhere('DeleteQuery<$T>', _where, _all);
     final c = SqlCompiler();
     final buf = StringBuffer('DELETE FROM ${_meta.tableName.safeTk}');
     if (_where != null) {
@@ -498,6 +582,25 @@ class DeleteQuery<T> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// An `ON CONFLICT` clause: [update] null means `DO NOTHING`, empty means
+/// "every inserted column but the target".
+class _OnConflict {
+  const _OnConflict(this.target, this.update);
+  final List<String> target;
+  final List<String>? update;
+}
+
+/// A forgotten `.where(...)` would otherwise update or delete the whole
+/// table, so that takes an explicit `.all()`.
+void _requireWhere(String builder, Expr<bool>? where, bool all) {
+  if (where == null && !all) {
+    throw InvalidQueryBuilderException(
+      '$builder has no WHERE clause; add .where(...) or call .all() to '
+      'affect every row',
+    );
+  }
+}
 
 /// Convert a camelCase identifier to snake_case.
 /// e.g. `createdAt` → `created_at`, `emailOtp` → `email_otp`.

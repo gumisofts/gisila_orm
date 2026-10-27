@@ -52,6 +52,28 @@ void main() {
           hasLength(1));
     });
 
+    test('a removed enum is dropped after the column that used it', () {
+      const old = '''
+enums:
+  Mood:
+    - happy
+    - sad
+
+User:
+  columns:
+    name:
+      type: varchar
+    mood:
+      type: Mood
+''';
+      final d = _diff(old, _user(_name));
+      final up = d.operations.map((o) => o.upSql).toList();
+      final dropCol = up.indexWhere((s) => s.contains('DROP COLUMN'));
+      final dropType = up.indexWhere((s) => s.startsWith('DROP TYPE'));
+      expect(dropCol, isNonNegative);
+      expect(dropType, greaterThan(dropCol));
+    });
+
     test('a guessed rename is flagged but not destructive', () {
       final d = _diff(_user(_bio), _user('    about:\n      type: text\n'));
       expect(d.guessedRenames, hasLength(1));
