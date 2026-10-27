@@ -303,12 +303,14 @@ class Query<T> {
       InsertQuery<T>._(_meta, values);
 
   /// Begin an `UPDATE _table_ SET ... [WHERE ...] RETURNING *`.
-  /// The WHERE clause from this `Query<T>` is reused.
+  /// The WHERE clause from this `Query<T>` is reused. Without one, the
+  /// update refuses to compile unless you call [UpdateQuery.all].
   UpdateQuery<T> update(Map<String, Object?> values) =>
       UpdateQuery<T>._(_meta, values, _where);
 
   /// Begin a `DELETE FROM _table_ [WHERE ...] RETURNING *`. Reuses the
-  /// WHERE clause from this query.
+  /// WHERE clause from this query. Without one, the delete refuses to
+  /// compile unless you call [DeleteQuery.all].
   DeleteQuery<T> delete() => DeleteQuery<T>._(_meta, _where);
 }
 
@@ -411,11 +413,18 @@ class UpdateQuery<T> {
   final Map<String, Object?> _values;
   Expr<bool>? _where;
   bool _returning = true;
+  bool _all = false;
 
   UpdateQuery._(this._meta, this._values, Expr<bool>? where) : _where = where;
 
   UpdateQuery<T> where(Expr<bool> predicate) {
     _where = _where == null ? predicate : _where!.and(predicate);
+    return this;
+  }
+
+  /// Allow the update to run without a WHERE clause, touching every row.
+  UpdateQuery<T> all() {
+    _all = true;
     return this;
   }
 
@@ -430,6 +439,7 @@ class UpdateQuery<T> {
         'UpdateQuery<$T> has no SET values',
       );
     }
+    _requireWhere('UpdateQuery<$T>', _where, _all);
 
     final c = SqlCompiler();
     final normalized = _normalizeKeys(_values);
@@ -462,11 +472,18 @@ class DeleteQuery<T> {
   final TableMeta<T> _meta;
   Expr<bool>? _where;
   bool _returning = true;
+  bool _all = false;
 
   DeleteQuery._(this._meta, Expr<bool>? where) : _where = where;
 
   DeleteQuery<T> where(Expr<bool> predicate) {
     _where = _where == null ? predicate : _where!.and(predicate);
+    return this;
+  }
+
+  /// Allow the delete to run without a WHERE clause, removing every row.
+  DeleteQuery<T> all() {
+    _all = true;
     return this;
   }
 
@@ -476,6 +493,7 @@ class DeleteQuery<T> {
   }
 
   CompiledSql compile() {
+    _requireWhere('DeleteQuery<$T>', _where, _all);
     final c = SqlCompiler();
     final buf = StringBuffer('DELETE FROM ${_meta.tableName.safeTk}');
     if (_where != null) {
@@ -498,6 +516,17 @@ class DeleteQuery<T> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// A forgotten `.where(...)` would otherwise update or delete the whole
+/// table, so that takes an explicit `.all()`.
+void _requireWhere(String builder, Expr<bool>? where, bool all) {
+  if (where == null && !all) {
+    throw InvalidQueryBuilderException(
+      '$builder has no WHERE clause; add .where(...) or call .all() to '
+      'affect every row',
+    );
+  }
+}
 
 /// Convert a camelCase identifier to snake_case.
 /// e.g. `createdAt` → `created_at`, `emailOtp` → `email_otp`.

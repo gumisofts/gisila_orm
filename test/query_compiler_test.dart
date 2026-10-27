@@ -181,6 +181,59 @@ void main() {
     });
   });
 
+  group('without WHERE', () {
+    test('UPDATE and DELETE refuse to touch every row by accident', () {
+      expect(() => Query(users()).update({'email': 'x'}).compile(),
+          throwsA(isA<InvalidQueryBuilderException>()));
+      expect(() => Query(users()).delete().compile(),
+          throwsA(isA<InvalidQueryBuilderException>()));
+    });
+
+    test('.all() opts in', () {
+      expect(Query(users()).update({'email': 'x'}).all().compile().sql,
+          'UPDATE "users" SET "email" = \$1 RETURNING *');
+      expect(Query(users()).delete().all().compile().sql,
+          'DELETE FROM "users" RETURNING *');
+    });
+
+    test('a WHERE added on the mutation builder counts', () {
+      expect(Query(users()).delete().where(id.eq(1)).compile().sql,
+          'DELETE FROM "users" WHERE ("users"."id" = \$1) RETURNING *');
+    });
+  });
+
+  group('RawSql', () {
+    test(r'renumbers $n to the statement and leaves ? alone', () {
+      final c = Query(users())
+          .where(id.eq(5))
+          .where(RawSql<bool>(
+              "data ? 'tags' AND score > \$2 AND rank < \$1", [3, 10]))
+          .compile();
+      expect(c.sql,
+          contains("AND (data ? 'tags' AND score > \$3 AND rank < \$2))"));
+      expect(c.params, [5, 3, 10]);
+    });
+
+    test('keeps an OR inside the fragment', () {
+      final c = Query(users())
+          .where(id.eq(5))
+          .where(const RawSql<bool>('a OR b'))
+          .compile();
+      expect(c.sql, endsWith('WHERE (("users"."id" = \$1) AND (a OR b))'));
+    });
+
+    test('rejects placeholders that do not match the parameters', () {
+      Object compile(RawSql<bool> raw) => Query(users()).where(raw).compile();
+      expect(() => compile(const RawSql<bool>('a = \$1')), throwsArgumentError);
+      expect(() => compile(const RawSql<bool>('a = \$2', [1])),
+          throwsArgumentError);
+      expect(() => compile(const RawSql<bool>('a = \$1', [1, 2])),
+          throwsArgumentError);
+      expect(
+          () => compile(const RawSql<bool>('a = ?', [1])), throwsArgumentError);
+    });
+  });
+
   group('DELETE', () {
     test('emits WHERE and RETURNING by default', () {
       final c = Query(users()).where(id.eq(1)).delete().compile();
@@ -220,7 +273,7 @@ void main() {
       final ins = Query(users()).insert({'x") values (1); --': 1}).compile();
       expect(
           ins.sql, startsWith('INSERT INTO "users" ("x"") values (1); --")'));
-      final upd = Query(users()).update({'a" = 1, "b': 2}).compile();
+      final upd = Query(users()).update({'a" = 1, "b': 2}).all().compile();
       expect(upd.sql, startsWith('UPDATE "users" SET "a"" = 1, ""b" = \$1'));
     });
 

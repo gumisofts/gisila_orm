@@ -211,6 +211,10 @@ class SchemaDiffer {
     // Find table changes
     _compareModels(oldModels, newModels, changes, operations);
 
+    // Only now can removed enum types go: a column or table still using
+    // one makes DROP TYPE fail.
+    _dropRemovedEnums(oldSchema, newSchema, changes, operations);
+
     final destructive = changes.where(_losesData).toList();
 
     return SchemaDiff(
@@ -310,9 +314,17 @@ class SchemaDiffer {
         ));
       }
     }
+  }
 
-    for (final e in oldEnums.values) {
-      if (newEnums.containsKey(e.name)) continue;
+  void _dropRemovedEnums(
+    SchemaDefinition oldSchema,
+    SchemaDefinition newSchema,
+    List<SchemaChange> changes,
+    List<MigrationOperation> operations,
+  ) {
+    final newEnums = {for (final e in newSchema.enums) e.name};
+    for (final e in oldSchema.enums) {
+      if (newEnums.contains(e.name)) continue;
       final change = SchemaChange(
         type: ChangeType.dropEnum,
         oldName: e.name,

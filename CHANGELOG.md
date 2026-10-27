@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Breaking: `update(...)` and `delete()` without a WHERE clause throw
+  `InvalidQueryBuilderException` instead of touching every row. Call
+  `.all()` on the builder when you mean the whole table.
+- Breaking: `RawSql` parameters are written `$1`, `$2`, ... (counted within
+  the fragment) instead of `?`, so the JSONB `?` operators work in raw SQL.
+  A fragment whose placeholders don't match its parameters throws
+  `ArgumentError`. Fragments are now parenthesised, so `RawSql('a OR b')`
+  next to another `where` no longer widens the match.
+- Fix: preloading with more than 10,000 parent keys runs in batches instead
+  of failing on Postgres' 65,535 bind-parameter limit.
+- Fix: migrations drop a removed enum type after the tables and columns that
+  used it, not before (`DROP TYPE` failed while a column still used it).
 - Fix: `count()` ignores ORDER BY, LIMIT and OFFSET, so it counts every
   matching row (Postgres used to reject the ORDER BY, and an OFFSET past
   the first row threw). With DISTINCT or GROUP BY it counts distinct rows or

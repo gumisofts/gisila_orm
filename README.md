@@ -973,6 +973,14 @@ Query<User>(UserTable.metadata)
 
 For SQL the AST can't model, drop down to `RawSql<T>(sql, params)` inside a
 predicate, or pass a `connection.execute(...)` directly via the `DbContext`.
+Parameters are `$1`, `$2`, ... counted within the fragment (they are
+renumbered to fit the statement), so `?` stays available for the JSONB
+operators:
+
+```dart
+Query<Post>(PostTable.metadata)
+    .where(RawSql<bool>("meta ? 'pinned' OR score > \$1", [10]));
+```
 
 ---
 
@@ -1020,6 +1028,13 @@ await Query<User>(UserTable.metadata)
     .where(UserTable.id.eq(1))
     .delete()
     .run(db);
+```
+
+An update or delete with no WHERE clause throws rather than touching every
+row. When you do mean the whole table, say so with `.all()`:
+
+```dart
+await Query<Session>(SessionTable.metadata).delete().all().run(db);
 ```
 
 ---

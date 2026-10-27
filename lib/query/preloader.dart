@@ -11,6 +11,8 @@
 /// to row-exploding outer joins.
 library gisila.query.preloader;
 
+import 'dart:math' show min;
+
 import 'package:gisila_orm/database/extensions.dart';
 import 'package:gisila_orm/database/postgres/exceptions/exceptions.dart';
 import 'package:gisila_orm/query/hydrator.dart';
@@ -211,14 +213,15 @@ class Preloader {
     }
 
     // 1. Junction lookup: parent_key -> [child_key, child_key, ...]
-    final placeholders =
-        Iterable.generate(parentKeys.length, (i) => '\$${i + 1}').join(', ');
-    final junctionSql = 'SELECT '
-        '${relation.junctionParentKey.safeTk}, '
-        '${relation.junctionChildKey.safeTk} '
-        'FROM ${relation.junctionTable.safeTk} '
-        'WHERE ${relation.junctionParentKey.safeTk} IN ($placeholders)';
-    final junctionRows = await db.execute(junctionSql, parameters: parentKeys);
+    final junctionRows = await _selectIn(
+      db,
+      'SELECT '
+      '${relation.junctionParentKey.safeTk}, '
+      '${relation.junctionChildKey.safeTk} '
+      'FROM ${relation.junctionTable.safeTk}',
+      relation.junctionParentKey,
+      parentKeys,
+    );
 
     final pairs = <MapEntry<Object, Object>>[];
     for (final row in junctionRows) {
@@ -269,6 +272,33 @@ class Preloader {
 
   // --- Helpers ----------------------------------------------------------
 
+  /// Postgres caps a statement at 65,535 bind parameters, so keys go out
+  /// in batches of this many.
+  static const maxKeysPerQuery = 10000;
+
+  /// Runs `<select> WHERE <column> IN ($1...$n)` once per batch of
+  /// [keys] and returns every row.
+  Future<List<ResultRow>> _selectIn(
+    DbContext db,
+    String select,
+    String column,
+    List<Object?> keys,
+  ) async {
+    final unique = keys.toSet().toList();
+    final rows = <ResultRow>[];
+    for (var start = 0; start < unique.length; start += maxKeysPerQuery) {
+      final batch =
+          unique.sublist(start, min(start + maxKeysPerQuery, unique.length));
+      final placeholders =
+          Iterable.generate(batch.length, (i) => '\$${i + 1}').join(', ');
+      rows.addAll(await db.execute(
+        '$select WHERE ${column.safeTk} IN ($placeholders)',
+        parameters: batch,
+      ));
+    }
+    return rows;
+  }
+
   /// Run `SELECT * FROM <meta.tableName> WHERE <column> IN ($1...$n)`
   /// and hydrate the rows into the typed model. Returned as `List<Object>`
   /// because the caller works with `Object` parents anyway.
@@ -278,16 +308,12 @@ class Preloader {
     required String column,
     required List<Object?> keys,
   }) async {
-    final placeholders =
-        Iterable.generate(keys.length, (i) => '\$${i + 1}').join(', ');
     final cols = meta.columnNames
         .map((c) => '${meta.tableName.safeTk}.${c.safeTk}')
         .join(', ');
-    final sql = 'SELECT $cols FROM ${meta.tableName.safeTk} '
-        'WHERE ${column.safeTk} IN ($placeholders)';
-    final result = await db.execute(sql, parameters: keys);
-    final hydrator = Hydrator(meta.fromRow);
-    return hydrator.hydrateAll(result).cast<Object>();
+    final rows = await _selectIn(
+        db, 'SELECT $cols FROM ${meta.tableName.safeTk}', column, keys);
+    return Hydrator(meta.fromRow).hydrateAll(rows).cast<Object>();
   }
 
   /// Write a single preloaded value onto a parent. The parent must be a
