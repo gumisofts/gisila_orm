@@ -1009,6 +1009,22 @@ await Query<User>(UserTable.metadata)
     .run(db);
 ```
 
+### Upsert
+
+```dart
+// Insert, or update the existing row with the same email.
+final user = await Query<User>(UserTable.metadata)
+    .insert({'email': 'a@b.com', 'name': 'Ada'})
+    .onConflictDoUpdate(['email']) // or update: ['name']
+    .one(db);
+
+// Insert unless a row with this email exists.
+await Query<User>(UserTable.metadata)
+    .insert({'email': 'a@b.com', 'name': 'Ada'})
+    .onConflictDoNothing(['email'])
+    .run(db);
+```
+
 ### Update
 
 ```dart
@@ -1037,6 +1053,20 @@ await Query<Session>(SessionTable.metadata).delete().all().run(db);
 ```
 
 ---
+
+## Keyset pagination and query logging
+
+```dart
+// Page through by id: each page costs the same however deep it is.
+final page = await Query<Post>(PostTable.metadata)
+    .after(PostTable.id, lastSeenId) // null for the first page
+    .limit(50)
+    .all(db.context());
+
+// See every statement; here, log the slow and failed ones.
+final db = await Database.connect(config,
+    onQuery: slowQueryLogger(const Duration(milliseconds: 200), print));
+```
 
 ## Transactions
 

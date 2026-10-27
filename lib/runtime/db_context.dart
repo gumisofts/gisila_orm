@@ -43,6 +43,48 @@ abstract class DbContext {
   });
 }
 
+/// Called after every statement a [DbContext] runs, with how long it took
+/// and the error when it failed. Pass one to `Database.connect(onQuery:)`
+/// for query logging or metrics; see [slowQueryLogger].
+typedef QueryObserver = void Function(
+  String sql,
+  List<Object?> parameters,
+  Duration elapsed,
+  Object? error,
+);
+
+/// A [QueryObserver] that reports statements slower than [threshold] (and
+/// failed ones) to [log]. Parameters are left out: they may hold secrets.
+QueryObserver slowQueryLogger(
+  Duration threshold,
+  void Function(String message) log,
+) =>
+    (sql, parameters, elapsed, error) {
+      if (error != null) {
+        log('query failed after ${elapsed.inMilliseconds} ms: $sql ($error)');
+      } else if (elapsed >= threshold) {
+        log('slow query (${elapsed.inMilliseconds} ms): $sql');
+      }
+    };
+
+Future<Result> _observed(
+  QueryObserver? observer,
+  String sql,
+  List<Object?> parameters,
+  Future<Result> Function() run,
+) async {
+  if (observer == null) return run();
+  final sw = Stopwatch()..start();
+  try {
+    final result = await run();
+    observer(sql, parameters, sw.elapsed, null);
+    return result;
+  } catch (e) {
+    observer(sql, parameters, sw.elapsed, e);
+    rethrow;
+  }
+}
+
 /// Rows fetched per round trip by [DbContext.stream].
 const cursorBatchSize = 500;
 
@@ -85,9 +127,10 @@ Stream<ResultRow> _streamInTransaction(
 /// connection from the pool, runs the statement, and returns the
 /// connection to the pool when done.
 class PoolDbContext implements DbContext {
-  PoolDbContext(this._pool);
+  PoolDbContext(this._pool, {QueryObserver? observer}) : _observer = observer;
 
   final Pool<Connection> _pool;
+  final QueryObserver? _observer;
 
   @override
   Future<Result> execute(
@@ -100,10 +143,15 @@ class PoolDbContext implements DbContext {
       // mode for parameter binding when [parameters] is non-empty -
       // wrapping in `Sql.indexed` would route through the Dart-side
       // tokenizer which does not understand bare `$n` tokens.
-      return await _pool.execute(
+      return await _observed(
+        _observer,
         sql,
-        parameters: parameters.isEmpty ? null : parameters,
-        queryMode: QueryMode.extended,
+        parameters,
+        () => _pool.execute(
+          sql,
+          parameters: parameters.isEmpty ? null : parameters,
+          queryMode: QueryMode.extended,
+        ),
       );
     } on ServerException catch (e) {
       throw PostgresErrorMapper.fromServerException(e, query: sql);
@@ -119,7 +167,7 @@ class PoolDbContext implements DbContext {
       return _buffered(execute(sql, parameters: parameters));
     }
     return _streamInTransaction(
-      (body) => runTransaction(_pool, _pool.runTx, body),
+      (body) => runTransaction(_pool, _pool.runTx, body, observer: _observer),
       sql,
       parameters,
     );
@@ -135,7 +183,9 @@ Stream<ResultRow> _buffered(Future<Result> result) async* {
 /// A [DbContext] that runs every statement against a single
 /// `TxSession`. Used inside `Database.transaction(...)` callbacks.
 class TxDbContext implements DbContext {
-  TxDbContext(this._session);
+  TxDbContext(this._session, {QueryObserver? observer}) : _observer = observer;
+
+  final QueryObserver? _observer;
 
   final TxSession _session;
   int _savepoints = 0;
@@ -147,10 +197,15 @@ class TxDbContext implements DbContext {
     List<Object?> parameters = const [],
   }) async {
     try {
-      return await _session.execute(
+      return await _observed(
+        _observer,
         sql,
-        parameters: parameters.isEmpty ? null : parameters,
-        queryMode: QueryMode.extended,
+        parameters,
+        () => _session.execute(
+          sql,
+          parameters: parameters.isEmpty ? null : parameters,
+          queryMode: QueryMode.extended,
+        ),
       );
     } on ServerException catch (e) {
       throw PostgresErrorMapper.fromServerException(e, query: sql);
@@ -239,6 +294,7 @@ Future<R> runTransaction<R>(
       runTx,
   Future<R> Function(TxDbContext tx) body, {
   TransactionSettings? settings,
+  QueryObserver? observer,
 }) async {
   final outer = Zone.current[_activeTxKey];
   if (outer is _ActiveTx && outer.open && identical(outer.owner, owner)) {
@@ -246,7 +302,7 @@ Future<R> runTransaction<R>(
   }
   try {
     return await runTx((session) {
-      final active = _ActiveTx(owner, TxDbContext(session));
+      final active = _ActiveTx(owner, TxDbContext(session, observer: observer));
       return runZoned(
         () => body(active.tx).whenComplete(() => active.open = false),
         zoneValues: {_activeTxKey: active},
@@ -262,7 +318,10 @@ Future<R> runTransaction<R>(
 /// `SET` without `LOCAL`) persists across calls, and [transaction] runs
 /// on the same connection.
 class ConnectionDbContext implements DbContext {
-  ConnectionDbContext(this._connection);
+  ConnectionDbContext(this._connection, {QueryObserver? observer})
+      : _observer = observer;
+
+  final QueryObserver? _observer;
 
   final Connection _connection;
 
@@ -272,10 +331,15 @@ class ConnectionDbContext implements DbContext {
     List<Object?> parameters = const [],
   }) async {
     try {
-      return await _connection.execute(
+      return await _observed(
+        _observer,
         sql,
-        parameters: parameters.isEmpty ? null : parameters,
-        queryMode: QueryMode.extended,
+        parameters,
+        () => _connection.execute(
+          sql,
+          parameters: parameters.isEmpty ? null : parameters,
+          queryMode: QueryMode.extended,
+        ),
       );
     } on ServerException catch (e) {
       throw PostgresErrorMapper.fromServerException(e, query: sql);
@@ -298,5 +362,5 @@ class ConnectionDbContext implements DbContext {
   /// Run [body] in a transaction on this connection, or in a savepoint
   /// when called from inside one.
   Future<R> transaction<R>(Future<R> Function(TxDbContext tx) body) =>
-      runTransaction(_connection, _connection.runTx, body);
+      runTransaction(_connection, _connection.runTx, body, observer: _observer);
 }

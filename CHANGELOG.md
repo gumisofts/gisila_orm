@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Removed the unused `PostgresTypeMapping` / `ColumnsDataType` enums
+  (their mapping disagreed with the generator) and the stale generated
+  `doc/api/` (it documented modules that no longer exist; `dart doc`
+  regenerates it, and pub.dev hosts the published docs).
+- Upsert: `insert(...).onConflictDoUpdate(['email'])` (every inserted
+  column but the target, or `update: [...]`), and
+  `onConflictDoNothing(['email'])` takes an optional target.
+- Keyset pagination: `query.after(Table.id, lastId).limit(n)`.
+- `Database.connect(onQuery:)` takes a `QueryObserver` that sees every
+  statement (SQL, parameters, duration, error), in transactions and streams
+  too; `slowQueryLogger(threshold, log)` builds one.
 - Breaking: `decimal` columns are `String` in generated models (was
   `double`, which rounded money); Postgres returns `numeric` as exact text
   and takes it back the same way. `json` columns are `Object` (was

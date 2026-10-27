@@ -31,7 +31,11 @@ import 'package:postgres/postgres.dart';
 /// await db.close();
 /// ```
 class Database {
-  Database._(this._config, this._pools, this._defaultName, this._onOpen);
+  Database._(this._config, this._pools, this._defaultName, this._onOpen,
+      this._onQuery);
+
+  /// Sees every statement run through this database (see [QueryObserver]).
+  final QueryObserver? _onQuery;
 
   final DatabaseConfig _config;
   final Map<String, Pool<Connection>> _pools;
@@ -49,11 +53,16 @@ class Database {
   /// connection. This is the right place to apply session-level
   /// configuration like `SET search_path` that must survive a pool
   /// dropping a connection (e.g. after a transaction rolls back).
+  ///
+  /// Pass [onQuery] to observe every statement (SQL, parameters, duration,
+  /// error), e.g. `onQuery: slowQueryLogger(Duration(milliseconds: 200),
+  /// print)`.
   static Future<Database> connect(
     DatabaseConfig config, {
     String? defaultConnectionName,
     bool eager = false,
     Future<void> Function(Connection connection)? onOpen,
+    QueryObserver? onQuery,
   }) async {
     final defaultName = defaultConnectionName ?? config.defaultConnection.name;
     if (!config.hasConnection(defaultName)) {
@@ -63,7 +72,7 @@ class Database {
     }
 
     final pools = <String, Pool<Connection>>{};
-    final db = Database._(config, pools, defaultName, onOpen);
+    final db = Database._(config, pools, defaultName, onOpen, onQuery);
 
     for (final name in config.connectionNames) {
       final c = config.getConnection(name)!;
@@ -190,7 +199,8 @@ class Database {
   /// statements outside a transaction; each call acquires a connection
   /// from the pool independently.
   DbContext context([String? connectionName]) =>
-      PoolDbContext(_poolFor(connectionName ?? _defaultName));
+      PoolDbContext(_poolFor(connectionName ?? _defaultName),
+          observer: _onQuery);
 
   /// One-shot statement execution. Acquires a connection from the
   /// default pool, runs the statement, returns the result. For
@@ -217,7 +227,8 @@ class Database {
     TransactionSettings? settings,
   }) async {
     final pool = _poolFor(connectionName ?? _defaultName);
-    return runTransaction(pool, pool.runTx, body, settings: settings);
+    return runTransaction(pool, pool.runTx, body,
+        settings: settings, observer: _onQuery);
   }
 
   /// Run [body] on one connection borrowed from the pool for its whole
@@ -229,7 +240,8 @@ class Database {
     String? connectionName,
   }) {
     final pool = _poolFor(connectionName ?? _defaultName);
-    return pool.withConnection((conn) => body(ConnectionDbContext(conn)));
+    return pool.withConnection(
+        (conn) => body(ConnectionDbContext(conn, observer: _onQuery)));
   }
 
   /// Cheap liveness check (`SELECT 1`).

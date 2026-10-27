@@ -325,7 +325,7 @@ class Preloader {
       throw PreloadException(
         'Cannot store preloaded "$relationName" on ${parent.runtimeType}: '
         'the model class must mix in `Preloadable`. Re-run code '
-        'generation (`dart run gisila:generate`) to regenerate models.',
+        'generation (`dart run gisila_orm:generate`) to regenerate models.',
       );
     }
     parent.$preloaded[relationName] = value;

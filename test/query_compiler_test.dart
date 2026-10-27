@@ -134,6 +134,63 @@ void main() {
     });
   });
 
+  group('upsert and keyset (ORM-17)', () {
+    test('ON CONFLICT DO NOTHING, with or without a target', () {
+      expect(
+          Query(users())
+              .insert({'email': 'a'})
+              .onConflictDoNothing()
+              .compile()
+              .sql,
+          contains(' ON CONFLICT DO NOTHING RETURNING *'));
+      expect(
+          Query(users())
+              .insert({'email': 'a'})
+              .onConflictDoNothing(['email'])
+              .compile()
+              .sql,
+          contains(' ON CONFLICT ("email") DO NOTHING'));
+    });
+
+    test('DO UPDATE sets every inserted column but the target by default', () {
+      final c = Query(users()).insert({
+        'email': 'a',
+        'isActive': true,
+        'age': 3
+      }).onConflictDoUpdate(['email']).compile();
+      expect(
+          c.sql,
+          endsWith(' ON CONFLICT ("email") DO UPDATE SET '
+              '"is_active" = EXCLUDED."is_active", "age" = EXCLUDED."age" '
+              'RETURNING *'));
+    });
+
+    test('DO UPDATE with an explicit column list', () {
+      expect(
+          Query(users())
+              .insert({'email': 'a', 'age': 3, 'is_active': true})
+              .onConflictDoUpdate(['email'], update: ['age'])
+              .compile()
+              .sql,
+          contains('DO UPDATE SET "age" = EXCLUDED."age" RETURNING'));
+    });
+
+    test('DO UPDATE needs a target', () {
+      expect(() => Query(users()).insert({'a': 1}).onConflictDoUpdate([]),
+          throwsArgumentError);
+    });
+
+    test('after() seeks past the last key and orders by it', () {
+      final first = Query(users()).after(id, null).limit(2).compile();
+      expect(first.sql, endsWith('ORDER BY "users"."id" ASC LIMIT 2'));
+      expect(first.sql, isNot(contains('WHERE')));
+      final next = Query(users()).after(id, 10, descending: true).compile();
+      expect(next.sql, contains('WHERE ("users"."id" < \$1)'));
+      expect(next.sql, contains('ORDER BY "users"."id" DESC'));
+      expect(next.params, [10]);
+    });
+  });
+
   group('INSERT', () {
     test('emits column list, values, and RETURNING * by default', () {
       final c = Query(users()).insert({
