@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-10-28 (BREAKING)
 
 - Removed the unused `PostgresTypeMapping` / `ColumnsDataType` enums
   (their mapping disagreed with the generator) and the stale generated

@@ -73,10 +73,10 @@ blog_demo/
 
 ---
 
-## 3. Add gisila as a dependency
+## 3. Add gisila_orm as a dependency
 
 ```bash
-dart pub add gisila
+dart pub add gisila_orm
 dart pub add --dev build_runner
 ```
 
@@ -84,7 +84,7 @@ Your `pubspec.yaml` should now contain:
 
 ```yaml
 dependencies:
-  gisila: ^0.0.1
+  gisila_orm: ^0.2.0
 
 dev_dependencies:
   build_runner: ^2.4.0
