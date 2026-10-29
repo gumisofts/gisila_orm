@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 — 2026-10-30
 
 - `package:gisila_orm/web.dart` for gisila apps (works with gisila 0.3
   and 0.4): `GisilaOrmDatabaseProvider` (closes the pool on `app.stop()`,
