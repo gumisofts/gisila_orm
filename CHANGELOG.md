@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 — 2026-10-30
+
+- `package:gisila_orm/web.dart` for gisila apps (works with gisila 0.3
+  and 0.4): `GisilaOrmDatabaseProvider` (closes the pool on `app.stop()`,
+  `isHealthy` for health checks) and `PostgresDbErrorMapper` (409 / 400 /
+  503 with codes; messages and `details.fields` name columns, never
+  values). Replaces the copies in the app template. New dependency:
+  `gisila`.
+- `Database.close()` is final: later queries throw a `StateError`
+  instead of quietly opening a new pool, and closing twice is harmless.
+
 ## 0.2.0 — 2026-10-28 (BREAKING)
 
 - Removed the unused `PostgresTypeMapping` / `ColumnsDataType` enums

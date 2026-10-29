@@ -41,8 +41,9 @@ final users = await Query<User>(UserTable.metadata)
 16. [CLI reference](#cli-reference)
 17. [Testing your code](#testing-your-code)
 18. [Error handling](#error-handling)
-19. [Architecture](#architecture)
-20. [Roadmap](#roadmap)
+19. [Using it with the gisila web framework](#using-it-with-the-gisila-web-framework)
+20. [Architecture](#architecture)
+21. [Roadmap](#roadmap)
 
 ---
 
@@ -1385,6 +1386,39 @@ the same exception type whether the failure happened inside or outside a
 transaction.
 
 ---
+
+## Using it with the gisila web framework
+
+`package:gisila_orm/web.dart` plugs the ORM into a
+[gisila](https://pub.dev/packages/gisila) app:
+
+```dart
+import 'package:gisila/gisila.dart';
+import 'package:gisila_orm/gisila.dart';
+import 'package:gisila_orm/web.dart';
+
+final db = await Database.connect(config);
+final orm = GisilaOrmDatabaseProvider(db);
+
+final app = GisilaApp(
+  config: AppConfig(
+    database: orm,                              // ctx.db<Database>() in handlers
+    dbErrorMapper: const PostgresDbErrorMapper(),
+    healthCheckPath: '/healthz',
+    healthCheck: orm.isHealthy,                 // 503 while the database is down
+  ),
+);
+```
+
+* `GisilaOrmDatabaseProvider` hands each request the shared `Database`
+  and closes its pool when the app stops (`closeOnDispose: false` if
+  something else owns it).
+* `PostgresDbErrorMapper` turns constraint errors into client errors:
+  unique and exclusion violations are `409`; foreign-key, not-null,
+  check and bad-value errors `400`; a lost connection `503`. Messages
+  name the column (`"email" is already taken.`, with
+  `details.fields: ["email"]`) but never the value, so the API doesn't
+  reveal which emails are registered.
 
 ## Architecture
 
