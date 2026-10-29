@@ -97,6 +97,9 @@ class Database {
   /// [DatabaseConnection], translating gisila settings into
   /// `package:postgres` settings (including `maxConnectionCount`).
   Pool<Connection> _poolFor(String name) {
+    if (_closed) {
+      throw StateError('Database is closed; connect a new one.');
+    }
     final cached = _pools[name];
     if (cached != null) return cached;
 
@@ -249,8 +252,13 @@ class Database {
     await execute('SELECT 1', connectionName: connectionName);
   }
 
-  /// Close all pools and release resources.
+  bool _closed = false;
+
+  /// Close all pools and release resources. Queries afterwards throw a
+  /// [StateError] instead of quietly opening new connections. Closing
+  /// again does nothing.
   Future<void> close() async {
+    _closed = true;
     for (final pool in _pools.values) {
       await pool.close();
     }
